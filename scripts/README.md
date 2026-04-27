@@ -113,8 +113,10 @@ powershell -ExecutionPolicy Bypass -File .\scripts\build-windows.ps1 -BuildName 
 
 输出目录：
 
-1. exe 目录：build\windows\x64\runner\Release
+1. exe 目录：build\windows\x64\runner\Release（文件名不一定是 runner.exe，例如可能是 storyforge_app.exe）
 2. zip 目录（启用 -Zip 时）：build\dist
+
+构建脚本会自动识别 Release 目录中的 `*.exe`，并在成功后输出可执行文件完整路径。
 
 ---
 
@@ -137,6 +139,20 @@ powershell -ExecutionPolicy Bypass -File .\scripts\setup-windows-build-env.ps1
 执行环境配置脚本并带上自动安装参数：
 
 powershell -ExecutionPolicy Bypass -File .\scripts\setup-windows-build-env.ps1 -InstallVsBuildToolsIfMissing
+
+### 4) 提示 Building with plugins requires symlink support
+
+这是 Windows 符号链接权限问题，处理方式二选一：
+
+1. 启用 Windows 开发者模式（推荐，一次设置长期生效）：
+   start ms-settings:developers
+2. 使用管理员身份运行 PowerShell 再执行构建。
+
+### 5) 只想确认 ZIP 是否生成成功
+
+```powershell
+Get-ChildItem .\build\dist\*.zip
+```
 
 ---
 

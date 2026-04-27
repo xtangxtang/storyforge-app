@@ -56,7 +56,15 @@ if (-not (Test-Path $outputDir)) {
     throw "Build finished but output directory was not found: $outputDir"
 }
 
+$exeFiles = @(Get-ChildItem -Path $outputDir -Filter '*.exe' -File -ErrorAction SilentlyContinue)
+if ($exeFiles.Count -eq 0) {
+    throw "Build finished but no .exe file was found in output directory: $outputDir"
+}
+
+$primaryExe = $exeFiles | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+
 Write-Host "`nBuild succeeded. Output directory: $outputDir" -ForegroundColor Green
+Write-Host "Detected executable: $($primaryExe.FullName)" -ForegroundColor Green
 
 if ($Zip) {
     $distDir = Join-Path $repoRoot 'build\dist'
