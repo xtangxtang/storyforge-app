@@ -3,6 +3,7 @@ import 'package:uuid/uuid.dart';
 import 'agent.dart';
 import '../services/llm_service.dart';
 import '../models/models.dart';
+import '../services/app_logger.dart';
 
 const _briefSystemPrompt = '''你是专业的影视策划人。根据用户的创意描述，生成一个短剧项目的 Brief。
 
@@ -105,6 +106,7 @@ class PlanningAgent extends Agent {
         messages: messages,
         jsonMode: true,
         temperature: 0.8,
+        requestTag: 'planning.generate',
       );
 
       final brief = jsonDecode(response.content) as Map<String, dynamic>;
@@ -122,7 +124,15 @@ class PlanningAgent extends Agent {
         'visual_style': brief['visual_style'] ?? '',
         'story_outline': brief['story_outline'],
       });
-    } catch (e) {
+    } catch (e, st) {
+      await AppLogger.error(
+        'Planning agent failed',
+        data: {
+          'projectId': context.projectId,
+        },
+        error: e,
+        stackTrace: st,
+      );
       return AgentResult.error('Planning failed: $e');
     }
   }
@@ -155,40 +165,117 @@ class ScriptAgent extends Agent {
       ),
     ];
 
+    String? responseContent;
+
     try {
       final response = await llm.chatCompletion(
         messages: messages,
         jsonMode: true,
         temperature: 0.8,
+        requestTag: 'script.generate',
       );
+      responseContent = response.content;
 
-      final result = jsonDecode(response.content) as Map<String, dynamic>;
-      if (result['scenes'] == null || result['scenes'] is! List) {
+      final decoded = jsonDecode(response.content);
+      final result = _asStringDynamicMap(decoded);
+      if (result == null) {
+        return AgentResult.error(
+          'Invalid script root format from LLM: ${decoded.runtimeType}',
+        );
+      }
+
+      final rawScenes = result['scenes'];
+      if (rawScenes is! List) {
         return AgentResult.error('Invalid script format from LLM');
       }
 
-      final scenes = (result['scenes'] as List)
-          .map((s) => Scene.fromMap(s as Map<String, dynamic>))
-          .toList();
-      final assets = result['assets'] as List? ?? [];
-      final assetList = assets
-          .map((a) => Asset(
-                id: 'asset_${a['name']?.replaceAll(' ', '_').toLowerCase() ?? ''}',
-                projectId: context.projectId,
-                type: a['type'] as String? ?? 'character',
-                name: a['name'] as String? ?? '',
-                description: a['description'] as String? ?? '',
-                prompt: a['description'] as String? ?? '',
-                createdAt: DateTime.now().millisecondsSinceEpoch,
-              ))
-          .toList();
+      final scenes = <Scene>[];
+      for (var index = 0; index < rawScenes.length; index++) {
+        final sceneMap = _asStringDynamicMap(rawScenes[index]);
+        if (sceneMap == null) {
+          await AppLogger.warn(
+            'Script scene item has invalid type',
+            data: {
+              'projectId': context.projectId,
+              'index': index,
+              'runtimeType': rawScenes[index].runtimeType.toString(),
+              'valuePreview': AppLogger.preview(rawScenes[index].toString()),
+            },
+          );
+          return AgentResult.error(
+            'Invalid script scene[$index] format: ${rawScenes[index].runtimeType}',
+          );
+        }
+        scenes.add(Scene.fromMap(sceneMap));
+      }
+
+      final rawAssets = result['assets'];
+      if (rawAssets != null && rawAssets is! List) {
+        return AgentResult.error(
+          'Invalid script assets format: ${rawAssets.runtimeType}',
+        );
+      }
+
+      final assetList = <Asset>[];
+      final assetItems = rawAssets as List? ?? const [];
+      for (var index = 0; index < assetItems.length; index++) {
+        final assetMap = _asStringDynamicMap(assetItems[index]);
+        if (assetMap == null) {
+          await AppLogger.warn(
+            'Script asset item has invalid type',
+            data: {
+              'projectId': context.projectId,
+              'index': index,
+              'runtimeType': assetItems[index].runtimeType.toString(),
+              'valuePreview': AppLogger.preview(assetItems[index].toString()),
+            },
+          );
+          return AgentResult.error(
+            'Invalid script asset[$index] format: ${assetItems[index].runtimeType}',
+          );
+        }
+
+        final assetName = assetMap['name']?.toString() ?? '';
+        final assetDescription = assetMap['description']?.toString() ?? '';
+        assetList.add(
+          Asset(
+            id: 'asset_${assetName.replaceAll(' ', '_').toLowerCase()}',
+            projectId: context.projectId,
+            type: assetMap['type']?.toString() ?? 'character',
+            name: assetName,
+            description: assetDescription,
+            prompt: assetDescription,
+            createdAt: DateTime.now().millisecondsSinceEpoch,
+          ),
+        );
+      }
+
+      await AppLogger.info(
+        'Script agent parsed response',
+        data: {
+          'projectId': context.projectId,
+          'sceneCount': scenes.length,
+          'assetCount': assetList.length,
+        },
+      );
 
       return AgentResult.success({
         'scenes': scenes,
         'assets': assetList,
         'raw': result,
       });
-    } catch (e) {
+    } catch (e, st) {
+      await AppLogger.error(
+        'Script agent failed',
+        data: {
+          'projectId': context.projectId,
+          'responsePreview': responseContent == null
+              ? 'n/a'
+              : AppLogger.preview(responseContent, maxLength: 800),
+        },
+        error: e,
+        stackTrace: st,
+      );
       return AgentResult.error('Script generation failed: $e');
     }
   }
@@ -230,6 +317,7 @@ class ProductionAgent extends Agent {
         messages: messages,
         jsonMode: true,
         temperature: 0.7,
+        requestTag: 'storyboard.generate',
       );
 
       final result = jsonDecode(response.content) as Map<String, dynamic>;
@@ -256,8 +344,32 @@ class ProductionAgent extends Agent {
       }).toList();
 
       return AgentResult.success({'storyboards': storyboards});
-    } catch (e) {
+    } catch (e, st) {
+      await AppLogger.error(
+        'Production agent failed',
+        data: {
+          'projectId': context.projectId,
+        },
+        error: e,
+        stackTrace: st,
+      );
       return AgentResult.error('Storyboard generation failed: $e');
     }
   }
+}
+
+Map<String, dynamic>? _asStringDynamicMap(dynamic value) {
+  if (value is Map<String, dynamic>) {
+    return value;
+  }
+
+  if (value is Map) {
+    try {
+      return Map<String, dynamic>.from(value);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  return null;
 }

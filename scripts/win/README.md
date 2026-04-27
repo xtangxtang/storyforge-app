@@ -65,15 +65,15 @@ Remove-Item Env:HTTPS_PROXY -ErrorAction SilentlyContinue
 
 ## 一、执行环境配置脚本
 
-脚本路径：scripts\setup-windows-build-env.ps1
+脚本路径：scripts\win\setup-windows-build-env.ps1
 
 ### 1. 仅检测环境并输出状态
 
-powershell -ExecutionPolicy Bypass -File .\scripts\setup-windows-build-env.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\win\setup-windows-build-env.ps1
 
 ### 2. 自动安装缺失项（推荐）
 
-powershell -ExecutionPolicy Bypass -File .\scripts\setup-windows-build-env.ps1 -InstallFlutterIfMissing -InstallVsBuildToolsIfMissing
+powershell -ExecutionPolicy Bypass -File .\scripts\win\setup-windows-build-env.ps1 -InstallFlutterIfMissing -InstallVsBuildToolsIfMissing
 
 说明：
 
@@ -82,7 +82,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\setup-windows-build-env.ps1 -
 
 ### 3. 指定 Flutter 安装目录（可选）
 
-powershell -ExecutionPolicy Bypass -File .\scripts\setup-windows-build-env.ps1 -InstallFlutterIfMissing -FlutterSdkPath C:\flutter
+powershell -ExecutionPolicy Bypass -File .\scripts\win\setup-windows-build-env.ps1 -InstallFlutterIfMissing -FlutterSdkPath C:\flutter
 
 说明：
 
@@ -93,23 +93,23 @@ powershell -ExecutionPolicy Bypass -File .\scripts\setup-windows-build-env.ps1 -
 
 ## 二、执行一键构建脚本
 
-脚本路径：scripts\build-windows.ps1
+脚本路径：scripts\win\build-windows.ps1
 
 ### 1. 最简构建（Release）
 
-powershell -ExecutionPolicy Bypass -File .\scripts\build-windows.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\win\build-windows.ps1
 
 ### 2. 先清理再构建
 
-powershell -ExecutionPolicy Bypass -File .\scripts\build-windows.ps1 -Clean
+powershell -ExecutionPolicy Bypass -File .\scripts\win\build-windows.ps1 -Clean
 
 ### 3. 构建并打包 ZIP
 
-powershell -ExecutionPolicy Bypass -File .\scripts\build-windows.ps1 -Clean -Zip
+powershell -ExecutionPolicy Bypass -File .\scripts\win\build-windows.ps1 -Clean -Zip
 
 ### 4. 指定版本号（可选）
 
-powershell -ExecutionPolicy Bypass -File .\scripts\build-windows.ps1 -BuildName 1.0.1 -BuildNumber 2
+powershell -ExecutionPolicy Bypass -File .\scripts\win\build-windows.ps1 -BuildName 1.0.1 -BuildNumber 2
 
 输出目录：
 
@@ -126,7 +126,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\build-windows.ps1 -BuildName 
 
 用以下命令执行（已包含临时绕过策略）：
 
-powershell -ExecutionPolicy Bypass -File .\scripts\setup-windows-build-env.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\win\setup-windows-build-env.ps1
 
 ### 2) 提示找不到 flutter
 
@@ -138,7 +138,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\setup-windows-build-env.ps1
 
 执行环境配置脚本并带上自动安装参数：
 
-powershell -ExecutionPolicy Bypass -File .\scripts\setup-windows-build-env.ps1 -InstallVsBuildToolsIfMissing
+powershell -ExecutionPolicy Bypass -File .\scripts\win\setup-windows-build-env.ps1 -InstallVsBuildToolsIfMissing
 
 ### 4) 提示 Building with plugins requires symlink support
 

@@ -6,6 +6,7 @@ import '../models/models.dart';
 import '../core/director_agent.dart';
 import '../core/agent.dart';
 import '../services/llm_service.dart';
+import '../services/app_logger.dart';
 import 'project_detail_screen.dart';
 
 class CreateProjectScreen extends StatefulWidget {
@@ -49,6 +50,16 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
 
     try {
       final projectId = 'proj_${const Uuid().v4().substring(0, 8)}';
+      await AppLogger.info(
+        'Project creation started',
+        data: {
+          'projectId': projectId,
+          'promptLength': _promptController.text.trim().length,
+          'llmBaseUrl': AppConfig.llmBaseUrl,
+          'proxy': AppConfig.httpsProxy.isEmpty ? 'DIRECT' : AppConfig.httpsProxy,
+        },
+      );
+
       final project = Project(
         id: projectId,
         name: _promptController.text.trim().substring(0, 20),
@@ -67,6 +78,13 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
         _currentStage = '策划';
         _statusText = '正在生成策划方案...';
       });
+      await AppLogger.info(
+        'Stage started',
+        data: {
+          'projectId': projectId,
+          'stage': 'planning',
+        },
+      );
       var agentCtx = AgentContext(
         projectId: projectId,
         data: {
@@ -76,9 +94,21 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
       );
       var result = await director.runPlanning(agentCtx);
       if (!result.success) {
-        _showError('策划生成失败: ${result.error}');
+        await _showError(
+          '策划生成失败: ${result.error}',
+          projectId: projectId,
+          stage: 'planning',
+        );
         return;
       }
+      await AppLogger.info(
+        'Stage completed',
+        data: {
+          'projectId': projectId,
+          'stage': 'planning',
+          'resultType': result.data?.runtimeType.toString(),
+        },
+      );
 
       // Save brief
       final briefData = result.data as Map<String, dynamic>?;
@@ -110,13 +140,32 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
         _currentStage = '编剧';
         _statusText = '正在生成剧本...';
       });
+      await AppLogger.info(
+        'Stage started',
+        data: {
+          'projectId': projectId,
+          'stage': 'scripting',
+        },
+      );
       agentCtx.data['currentStage'] = 'scripting';
       agentCtx.data['prompt'] = _promptController.text.trim();
       result = await director.runScripting(agentCtx);
       if (!result.success) {
-        _showError('剧本生成失败: ${result.error}');
+        await _showError(
+          '剧本生成失败: ${result.error}',
+          projectId: projectId,
+          stage: 'scripting',
+        );
         return;
       }
+      await AppLogger.info(
+        'Stage completed',
+        data: {
+          'projectId': projectId,
+          'stage': 'scripting',
+          'resultType': result.data?.runtimeType.toString(),
+        },
+      );
 
       // Save script and assets
       final scriptData = result.data as Map<String, dynamic>?;
@@ -145,12 +194,31 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
         _currentStage = '分镜';
         _statusText = '正在生成分镜...';
       });
+      await AppLogger.info(
+        'Stage started',
+        data: {
+          'projectId': projectId,
+          'stage': 'storyboarding',
+        },
+      );
       agentCtx.data['currentStage'] = 'storyboarding';
       result = await director.runStoryboarding(agentCtx);
       if (!result.success) {
-        _showError('分镜生成失败: ${result.error}');
+        await _showError(
+          '分镜生成失败: ${result.error}',
+          projectId: projectId,
+          stage: 'storyboarding',
+        );
         return;
       }
+      await AppLogger.info(
+        'Stage completed',
+        data: {
+          'projectId': projectId,
+          'stage': 'storyboarding',
+          'resultType': result.data?.runtimeType.toString(),
+        },
+      );
 
       final storyboardData = result.data as Map<String, dynamic>?;
       if (storyboardData != null) {
@@ -165,6 +233,16 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
       // Navigate to project detail
       final newProject = await _projectDao.getById(projectId);
       if (newProject != null && mounted) {
+        await AppLogger.info(
+          'Project creation finished',
+          data: {
+            'projectId': projectId,
+            'nextState': newProject.state,
+          },
+        );
+        if (!mounted) {
+          return;
+        }
         Navigator.pushReplacement(
           context,
           MaterialPageRoute(
@@ -172,8 +250,13 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
           ),
         );
       }
-    } catch (e) {
-      _showError('创建失败: $e');
+    } catch (e, st) {
+      await _showError(
+        '创建失败: $e',
+        error: e,
+        stackTrace: st,
+        stage: _currentStage,
+      );
     } finally {
       if (mounted) {
         setState(() => _creating = false);
@@ -181,11 +264,30 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
     }
   }
 
-  void _showError(String message) {
+  Future<void> _showError(
+    String message, {
+    String? projectId,
+    String? stage,
+    Object? error,
+    StackTrace? stackTrace,
+  }) async {
+    await AppLogger.error(
+      'Project creation failed',
+      data: {
+        'projectId': projectId,
+        'stage': stage,
+        'userMessage': message,
+      },
+      error: error ?? message,
+      stackTrace: stackTrace,
+    );
+
     if (mounted) {
       setState(() => _creating = false);
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(message)),
+        SnackBar(
+          content: Text('$message\n日志: ${AppLogger.logFilePath}'),
+        ),
       );
     }
   }

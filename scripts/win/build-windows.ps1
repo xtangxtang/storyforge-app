@@ -21,7 +21,7 @@ function Assert-Tool {
 }
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$repoRoot = Resolve-Path (Join-Path $scriptDir '..')
+$repoRoot = Resolve-Path (Join-Path $scriptDir '..\..')
 Set-Location $repoRoot
 
 Write-Host "Storyforge one-click Windows build script" -ForegroundColor Green

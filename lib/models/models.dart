@@ -170,6 +170,17 @@ class Scene {
       duration: map['duration'] as int? ?? 0,
     );
   }
+
+  Map<String, dynamic> toMap() {
+    return {
+      'scene_num': sceneNum,
+      'location': location,
+      'description': description,
+      'action': action,
+      'dialogue': dialogue,
+      'duration': duration,
+    };
+  }
 }
 
 class Asset {

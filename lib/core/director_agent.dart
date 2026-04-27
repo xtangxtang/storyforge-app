@@ -1,6 +1,8 @@
 import 'dart:convert';
 import 'agent.dart';
 import 'agents.dart';
+import '../models/models.dart';
+import '../services/app_logger.dart';
 import '../services/llm_service.dart';
 
 const _directorReviewSystemPrompt = '''你是短剧质量评审。请审阅以下输出内容，给出质量评估。
@@ -159,6 +161,17 @@ class DirectorAgent extends Agent {
     AgentResult? lastResult;
 
     for (int attempt = 0; attempt <= maxRetries; attempt++) {
+      await AppLogger.info(
+        'Director stage attempt started',
+        data: {
+          'projectId': context.projectId,
+          'stage': context.data['currentStage']?.toString() ?? 'planning',
+          'agent': agent.name,
+          'reviewContent': reviewContent,
+          'attempt': attempt + 1,
+        },
+      );
+
       if (attempt > 0 && lastResult != null) {
         // Inject feedback into context for retry
         final reviewData = lastResult.data;
@@ -173,6 +186,16 @@ class DirectorAgent extends Agent {
       // Run the agent
       lastResult = await agent.run(context);
       if (!lastResult.success) {
+        await AppLogger.warn(
+          'Director stage agent returned error',
+          data: {
+            'projectId': context.projectId,
+            'stage': context.data['currentStage']?.toString() ?? 'planning',
+            'agent': agent.name,
+            'attempt': attempt + 1,
+            'errorMessage': lastResult.error,
+          },
+        );
         return lastResult;
       }
 
@@ -189,6 +212,16 @@ class DirectorAgent extends Agent {
         final feedback = reviewData['feedback'] as String? ?? '';
 
         if (passed) {
+          await AppLogger.info(
+            'Director review passed',
+            data: {
+              'projectId': context.projectId,
+              'stage': context.data['currentStage']?.toString() ?? 'planning',
+              'agent': agent.name,
+              'attempt': attempt + 1,
+              'score': score,
+            },
+          );
           final resultData = <String, dynamic>{
             'reviewScore': score,
             'nextStage': _getNextStage(context),
@@ -200,6 +233,16 @@ class DirectorAgent extends Agent {
         }
 
         if (attempt >= maxRetries) {
+          await AppLogger.warn(
+            'Director review exhausted retries',
+            data: {
+              'projectId': context.projectId,
+              'stage': context.data['currentStage']?.toString() ?? 'planning',
+              'agent': agent.name,
+              'score': score,
+              'feedback': feedback,
+            },
+          );
           final resultData = <String, dynamic>{
             'reviewScore': score,
             'reviewFeedback': '审阅未通过（$maxRetries次重试仍失败）：$feedback',
@@ -210,8 +253,29 @@ class DirectorAgent extends Agent {
           }
           return AgentResult.success(resultData);
         }
+
+        await AppLogger.warn(
+          'Director review requested retry',
+          data: {
+            'projectId': context.projectId,
+            'stage': context.data['currentStage']?.toString() ?? 'planning',
+            'agent': agent.name,
+            'attempt': attempt + 1,
+            'score': score,
+            'feedback': feedback,
+          },
+        );
       } else {
         // Review didn't parse correctly, assume pass
+        await AppLogger.warn(
+          'Director review returned non-map payload; treating as pass',
+          data: {
+            'projectId': context.projectId,
+            'stage': context.data['currentStage']?.toString() ?? 'planning',
+            'agent': agent.name,
+            'reviewDataType': reviewData.runtimeType.toString(),
+          },
+        );
         final resultData = <String, dynamic>{
           'nextStage': _getNextStage(context),
         };
@@ -231,9 +295,11 @@ class DirectorAgent extends Agent {
       return AgentResult.success({});
     }
 
+    final reviewContent = _toReviewableContent(content);
+
     final prompt = promptTemplate.replaceFirst(
       '{content}',
-      content is Map ? jsonEncode(content) : content.toString(),
+      reviewContent is String ? reviewContent : jsonEncode(reviewContent),
     );
 
     try {
@@ -242,16 +308,58 @@ class DirectorAgent extends Agent {
           ChatMessage(role: 'system', content: _directorReviewSystemPrompt),
           ChatMessage(role: 'user', content: prompt),
         ],
+        requestTag: 'director.review.$type',
         jsonMode: true,
         temperature: 0.3,
       );
 
       final review = jsonDecode(response.content) as Map<String, dynamic>;
       return AgentResult.success(review);
-    } catch (e) {
+    } catch (e, st) {
+      await AppLogger.warn(
+        'Director review failed; treating as pass',
+        data: {
+          'type': type,
+        },
+        error: e,
+        stackTrace: st,
+      );
       // If review fails, assume pass
       return AgentResult.success({'pass': true, 'score': 5});
     }
+  }
+
+  dynamic _toReviewableContent(dynamic value) {
+    if (value == null || value is num || value is bool || value is String) {
+      return value;
+    }
+
+    if (value is Scene) {
+      return value.toMap();
+    }
+
+    if (value is Asset) {
+      return value.toMap();
+    }
+
+    if (value is Storyboard) {
+      return value.toMap();
+    }
+
+    if (value is List) {
+      return value.map(_toReviewableContent).toList();
+    }
+
+    if (value is Map) {
+      return value.map(
+        (key, dynamic nestedValue) => MapEntry(
+          key.toString(),
+          _toReviewableContent(nestedValue),
+        ),
+      );
+    }
+
+    return value.toString();
   }
 
   String _getNextStage(AgentContext context) {

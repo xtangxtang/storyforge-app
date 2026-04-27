@@ -1,12 +1,15 @@
 import 'dart:convert';
 import 'dart:async';
+import 'dart:io';
 import 'package:http/http.dart' as http;
 import '../config/app_config.dart';
+import 'http_client_factory.dart';
 
 class DashscopeService {
   final http.Client _client;
 
-  DashscopeService({http.Client? client}) : _client = client ?? http.Client();
+  DashscopeService({http.Client? client})
+      : _client = client ?? createConfiguredHttpClient();
 
   /// Generate image via wan2.7-image model
   /// Uses multimodal-generation endpoint
@@ -47,9 +50,20 @@ class DashscopeService {
       },
     });
 
-    final response = await _client
-        .post(uri, headers: headers, body: body)
-        .timeout(const Duration(seconds: 60));
+    http.Response response;
+    try {
+      response = await _client
+          .post(uri, headers: headers, body: body)
+          .timeout(const Duration(seconds: 60));
+    } on TimeoutException {
+      throw Exception(
+        'Image generation timed out after 60s. Endpoint: $uri, proxy: ${normalizeConfiguredProxy() ?? 'DIRECT'}',
+      );
+    } on SocketException catch (e) {
+      throw Exception(
+        'Image generation network request failed. Endpoint: $uri, proxy: ${normalizeConfiguredProxy() ?? 'DIRECT'}, error: ${e.message}',
+      );
+    }
 
     if (response.statusCode != 200) {
       throw Exception('Image generation failed: ${response.body}');
@@ -85,7 +99,20 @@ class DashscopeService {
       final headers = {
         'Authorization': 'Bearer $apiKey',
       };
-      final response = await _client.get(uri, headers: headers);
+      http.Response response;
+      try {
+        response = await _client
+            .get(uri, headers: headers)
+            .timeout(const Duration(seconds: 60));
+      } on TimeoutException {
+        throw Exception(
+          'Image task polling timed out. Endpoint: $uri, proxy: ${normalizeConfiguredProxy() ?? 'DIRECT'}',
+        );
+      } on SocketException catch (e) {
+        throw Exception(
+          'Image task polling failed. Endpoint: $uri, proxy: ${normalizeConfiguredProxy() ?? 'DIRECT'}, error: ${e.message}',
+        );
+      }
       final data = jsonDecode(response.body) as Map<String, dynamic>;
       final status = data['output']?['task_status'] as String?;
 
@@ -151,9 +178,20 @@ class DashscopeService {
       },
     });
 
-    final response = await _client
-        .post(uri, headers: headers, body: body)
-        .timeout(const Duration(seconds: 60));
+    http.Response response;
+    try {
+      response = await _client
+          .post(uri, headers: headers, body: body)
+          .timeout(const Duration(seconds: 60));
+    } on TimeoutException {
+      throw Exception(
+        'Video generation timed out after 60s. Endpoint: $uri, proxy: ${normalizeConfiguredProxy() ?? 'DIRECT'}',
+      );
+    } on SocketException catch (e) {
+      throw Exception(
+        'Video generation network request failed. Endpoint: $uri, proxy: ${normalizeConfiguredProxy() ?? 'DIRECT'}, error: ${e.message}',
+      );
+    }
 
     if (response.statusCode != 200) {
       throw Exception('Video generation failed: ${response.body}');
@@ -178,7 +216,20 @@ class DashscopeService {
       final headers = {
         'Authorization': 'Bearer $apiKey',
       };
-      final response = await _client.get(uri, headers: headers);
+      http.Response response;
+      try {
+        response = await _client
+            .get(uri, headers: headers)
+            .timeout(const Duration(seconds: 60));
+      } on TimeoutException {
+        throw Exception(
+          'Video task polling timed out. Endpoint: $uri, proxy: ${normalizeConfiguredProxy() ?? 'DIRECT'}',
+        );
+      } on SocketException catch (e) {
+        throw Exception(
+          'Video task polling failed. Endpoint: $uri, proxy: ${normalizeConfiguredProxy() ?? 'DIRECT'}, error: ${e.message}',
+        );
+      }
       final data = jsonDecode(response.body) as Map<String, dynamic>;
       final status = data['output']?['task_status'] as String?;
 

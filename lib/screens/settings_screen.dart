@@ -9,6 +9,7 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
+  final _llmBaseUrlController = TextEditingController();
   final _llmKeyController = TextEditingController();
   final _dashscopeKeyController = TextEditingController();
   final _proxyController = TextEditingController();
@@ -22,6 +23,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _loadSettings() async {
+    _llmBaseUrlController.text = AppConfig.llmBaseUrl;
     _llmKeyController.text = AppConfig.llmApiKey;
     _dashscopeKeyController.text = AppConfig.dashscopeApiKey;
     _proxyController.text = AppConfig.httpsProxy;
@@ -31,6 +33,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _save() async {
     setState(() => _saving = true);
     await AppConfig.save(
+      baseUrl: _llmBaseUrlController.text.trim(),
       apiKey: _llmKeyController.text.trim(),
       dashscopeKey: _dashscopeKeyController.text.trim(),
       proxy: _proxyController.text.trim(),
@@ -57,6 +60,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
             const Text(
               'API 配置',
               style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: _llmBaseUrlController,
+              decoration: const InputDecoration(
+                labelText: 'LLM Base URL',
+                hintText: 'https://coding.dashscope.aliyuncs.com/v1',
+                border: OutlineInputBorder(),
+                prefixIcon: Icon(Icons.link),
+              ),
             ),
             const SizedBox(height: 16),
             TextField(
@@ -117,6 +130,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             const SizedBox(height: 8),
             const Text(
+              '• LLM Base URL 默认使用套餐专属 OpenAI 兼容地址\n'
               '• LLM API Key 用于调用 qwen3.6-plus 模型（策划、编剧、分镜生成）\n'
               '• 图视频 API Key 用于调用 wan2.7-image 和 wan2.7-i2v 模型\n'
               '• 两个 Key 可能相同，也可能不同，取决于您的 DashScope 账户配置',
@@ -130,6 +144,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   @override
   void dispose() {
+    _llmBaseUrlController.dispose();
     _llmKeyController.dispose();
     _dashscopeKeyController.dispose();
     _proxyController.dispose();
