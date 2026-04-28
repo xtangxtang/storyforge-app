@@ -71,42 +71,6 @@ Brief 内容：
 输出严格 JSON：{"score": 1-10, "pass": true/false, "feedback": "修改建议（中文）"}''',
 };
 
-/// Events emitted during stage execution for UI progress display
-enum StageEventType {
-  started,       // stage beginning
-  generating,    // agent generating content
-  generated,     // agent finished generating
-  reviewing,     // review starting
-  reviewPassed,  // review passed
-  reviewFailed,  // review failed, will retry
-  retryAttempt,  // retry attempt starting
-  exhausted,     // max retries exhausted
-  completed,     // stage fully done
-  error,         // stage error
-}
-
-class StageEvent {
-  final StageEventType type;
-  final String stageLabel;
-  final String? content;
-  final int? score;
-  final bool? passed;
-  final String? feedback;
-  final int attempt;
-
-  StageEvent({
-    required this.type,
-    required this.stageLabel,
-    this.content,
-    this.score,
-    this.passed,
-    this.feedback,
-    this.attempt = 1,
-  });
-}
-
-typedef StageEventCallback = void Function(StageEvent event);
-
 class DirectorAgent extends Agent {
   @override
   String get name => 'DirectorAgent';
@@ -146,47 +110,41 @@ class DirectorAgent extends Agent {
     }
   }
 
-  Future<AgentResult> runPlanning(AgentContext context, {StageEventCallback? onEvent}) async {
+  Future<AgentResult> runPlanning(AgentContext context) async {
     return runStageWithReview(
       context,
       planningAgent,
       reviewContent: 'brief',
-      stageLabel: '策划',
-      onEvent: onEvent,
     );
   }
 
-  Future<AgentResult> runScripting(AgentContext context, {StageEventCallback? onEvent}) async {
+  Future<AgentResult> runScripting(AgentContext context) async {
     return runStageWithReview(
       context,
       scriptAgent,
       reviewContent: 'script',
-      stageLabel: '编剧',
-      onEvent: onEvent,
     );
   }
 
-  Future<AgentResult> runAsseting(AgentContext context, {StageEventCallback? onEvent}) async {
+  Future<AgentResult> runAsseting(AgentContext context) async {
     // Assets are extracted from script output
     return advanceIfOk(context, AgentResult.success({}), 'storyboarding');
   }
 
-  Future<AgentResult> runStoryboarding(AgentContext context, {StageEventCallback? onEvent}) async {
+  Future<AgentResult> runStoryboarding(AgentContext context) async {
     return runStageWithReview(
       context,
       productionAgent,
       reviewContent: 'storyboard',
-      stageLabel: '分镜',
-      onEvent: onEvent,
     );
   }
 
-  Future<AgentResult> runGenerating(AgentContext context, {StageEventCallback? onEvent}) async {
+  Future<AgentResult> runGenerating(AgentContext context) async {
     // Video generation - handled separately by the UI/workflow
     return advanceIfOk(context, AgentResult.success({}), 'cutting');
   }
 
-  Future<AgentResult> runCutting(AgentContext context, {StageEventCallback? onEvent}) async {
+  Future<AgentResult> runCutting(AgentContext context) async {
     // Final video stitching - handled separately
     return AgentResult.success({
       ...context.data,
@@ -199,17 +157,20 @@ class DirectorAgent extends Agent {
     AgentContext context,
     Agent agent, {
     required String reviewContent,
-    required String stageLabel,
-    StageEventCallback? onEvent,
   }) async {
     AgentResult? lastResult;
 
     for (int attempt = 0; attempt <= maxRetries; attempt++) {
-      onEvent?.call(StageEvent(
-        type: attempt == 0 ? StageEventType.started : StageEventType.retryAttempt,
-        stageLabel: stageLabel,
-        attempt: attempt + 1,
-      ));
+      await AppLogger.info(
+        'Director stage attempt started',
+        data: {
+          'projectId': context.projectId,
+          'stage': context.data['currentStage']?.toString() ?? 'planning',
+          'agent': agent.name,
+          'reviewContent': reviewContent,
+          'attempt': attempt + 1,
+        },
+      );
 
       if (attempt > 0 && lastResult != null) {
         // Inject feedback into context for retry
@@ -223,12 +184,6 @@ class DirectorAgent extends Agent {
       }
 
       // Run the agent
-      onEvent?.call(StageEvent(
-        type: StageEventType.generating,
-        stageLabel: stageLabel,
-        attempt: attempt + 1,
-      ));
-
       lastResult = await agent.run(context);
       if (!lastResult.success) {
         await AppLogger.warn(
@@ -241,31 +196,10 @@ class DirectorAgent extends Agent {
             'errorMessage': lastResult.error,
           },
         );
-        onEvent?.call(StageEvent(
-          type: StageEventType.error,
-          stageLabel: stageLabel,
-          attempt: attempt + 1,
-          feedback: lastResult.error,
-        ));
         return lastResult;
       }
 
-      // Notify that content was generated
-      final contentPreview = _previewOutput(lastResult.data, reviewContent);
-      onEvent?.call(StageEvent(
-        type: StageEventType.generated,
-        stageLabel: stageLabel,
-        content: contentPreview,
-        attempt: attempt + 1,
-      ));
-
       // Review the output
-      onEvent?.call(StageEvent(
-        type: StageEventType.reviewing,
-        stageLabel: stageLabel,
-        attempt: attempt + 1,
-      ));
-
       final reviewResult = await _review(
         reviewContent,
         lastResult.data,
@@ -278,15 +212,6 @@ class DirectorAgent extends Agent {
         final feedback = reviewData['feedback'] as String? ?? '';
 
         if (passed) {
-          onEvent?.call(StageEvent(
-            type: StageEventType.reviewPassed,
-            stageLabel: stageLabel,
-            score: score.toInt(),
-            passed: true,
-            feedback: feedback.isEmpty ? '通过' : feedback,
-            attempt: attempt + 1,
-          ));
-
           await AppLogger.info(
             'Director review passed',
             data: {
@@ -306,15 +231,6 @@ class DirectorAgent extends Agent {
           }
           return AgentResult.success(resultData);
         }
-
-        onEvent?.call(StageEvent(
-          type: StageEventType.reviewFailed,
-          stageLabel: stageLabel,
-          score: score.toInt(),
-          passed: false,
-          feedback: feedback,
-          attempt: attempt + 1,
-        ));
 
         if (attempt >= maxRetries) {
           await AppLogger.warn(
@@ -360,14 +276,6 @@ class DirectorAgent extends Agent {
             'reviewDataType': reviewData.runtimeType.toString(),
           },
         );
-        onEvent?.call(StageEvent(
-          type: StageEventType.reviewPassed,
-          stageLabel: stageLabel,
-          score: 5,
-          passed: true,
-          feedback: '审阅通过',
-          attempt: attempt + 1,
-        ));
         final resultData = <String, dynamic>{
           'nextStage': _getNextStage(context),
         };
@@ -379,52 +287,6 @@ class DirectorAgent extends Agent {
     }
 
     return lastResult ?? AgentResult.error('Unknown error');
-  }
-
-  String _previewOutput(dynamic data, String reviewType) {
-    if (data is! Map<String, dynamic>) return '';
-    switch (reviewType) {
-      case 'brief':
-        final parts = <String>[];
-        if (data['genre'] != null) parts.add('类型: ${data['genre']}');
-        if (data['duration'] != null) parts.add('时长: ${data['duration']}秒');
-        if (data['mood'] != null) parts.add('情绪: ${data['mood']}');
-        if (data['visual_style'] != null) parts.add('风格: ${data['visual_style']}');
-        if (data['story_outline'] != null) parts.add('故事: ${data['story_outline']}');
-        return parts.join('\n');
-      case 'script':
-        final scenes = data['scenes'] as List?;
-        if (scenes != null) {
-          final lines = <String>[];
-          for (final s in scenes) {
-            if (s is Map<String, dynamic>) {
-              final num = s['scene_num'];
-              final loc = s['location'] ?? '';
-              final desc = s['description'] ?? '';
-              lines.add('场景${num}: [$loc] $desc');
-            }
-          }
-          return lines.join('\n');
-        }
-        return '';
-      case 'storyboard':
-        final storyboards = data['storyboards'] as List?;
-        if (storyboards != null) {
-          final lines = <String>[];
-          for (final sb in storyboards) {
-            if (sb is Map<String, dynamic>) {
-              final scene = sb['scene_num'];
-              final shot = sb['shot_num'];
-              final desc = sb['description'] ?? '';
-              lines.add('镜头${scene}-${shot}: $desc');
-            }
-          }
-          return lines.join('\n');
-        }
-        return '';
-      default:
-        return '';
-    }
   }
 
   Future<AgentResult> _review(String type, dynamic content) async {

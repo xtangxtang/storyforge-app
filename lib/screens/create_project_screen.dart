@@ -22,8 +22,7 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
   final _llm = LlmService();
 
   bool _creating = false;
-  String _currentStage = '';
-  String _statusText = '';
+  final List<StageProgress> _stages = [];
 
   Future<void> _createProject() async {
     if (_promptController.text.trim().isEmpty) {
@@ -44,8 +43,7 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
 
     setState(() {
       _creating = true;
-      _currentStage = 'planning';
-      _statusText = '正在初始化...';
+      _stages.clear();
     });
 
     try {
@@ -70,21 +68,11 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
 
       await _projectDao.insert(project);
 
-      // Run DirectorAgent pipeline
       final director = DirectorAgent(llm: _llm);
 
       // Stage 1: Planning
-      setState(() {
-        _currentStage = '策划';
-        _statusText = '正在生成策划方案...';
-      });
-      await AppLogger.info(
-        'Stage started',
-        data: {
-          'projectId': projectId,
-          'stage': 'planning',
-        },
-      );
+      final planningStage = StageProgress(label: '策划', icon: Icons.lightbulb);
+      setState(() => _stages.add(planningStage));
       var agentCtx = AgentContext(
         projectId: projectId,
         data: {
@@ -92,25 +80,21 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
           'currentStage': 'planning',
         },
       );
-      var result = await director.runPlanning(agentCtx);
+
+      var result = await director.runPlanning(
+        agentCtx,
+        onEvent: (event) => _onStageEvent(planningStage, event),
+      );
       if (!result.success) {
-        await _showError(
-          '策划生成失败: ${result.error}',
-          projectId: projectId,
-          stage: 'planning',
+        planningStage.status = 'error';
+        planningStage.feedback = result.error;
+        setState(() {});
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('策划生成失败: ${result.error}')),
         );
         return;
       }
-      await AppLogger.info(
-        'Stage completed',
-        data: {
-          'projectId': projectId,
-          'stage': 'planning',
-          'resultType': result.data?.runtimeType.toString(),
-        },
-      );
 
-      // Save brief
       final briefData = result.data as Map<String, dynamic>?;
       if (briefData != null) {
         final brief = Brief(
@@ -132,42 +116,28 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
         };
       }
 
-      // Update project state
       await _projectDao.updateState(projectId, 'scripting');
 
       // Stage 2: Scripting
-      setState(() {
-        _currentStage = '编剧';
-        _statusText = '正在生成剧本...';
-      });
-      await AppLogger.info(
-        'Stage started',
-        data: {
-          'projectId': projectId,
-          'stage': 'scripting',
-        },
-      );
+      final scriptStage = StageProgress(label: '编剧', icon: Icons.edit_note);
+      setState(() => _stages.add(scriptStage));
       agentCtx.data['currentStage'] = 'scripting';
       agentCtx.data['prompt'] = _promptController.text.trim();
-      result = await director.runScripting(agentCtx);
+
+      result = await director.runScripting(
+        agentCtx,
+        onEvent: (event) => _onStageEvent(scriptStage, event),
+      );
       if (!result.success) {
-        await _showError(
-          '剧本生成失败: ${result.error}',
-          projectId: projectId,
-          stage: 'scripting',
+        scriptStage.status = 'error';
+        scriptStage.feedback = result.error;
+        setState(() {});
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('剧本生成失败: ${result.error}')),
         );
         return;
       }
-      await AppLogger.info(
-        'Stage completed',
-        data: {
-          'projectId': projectId,
-          'stage': 'scripting',
-          'resultType': result.data?.runtimeType.toString(),
-        },
-      );
 
-      // Save script and assets
       final scriptData = result.data as Map<String, dynamic>?;
       if (scriptData != null) {
         final raw = scriptData['raw'] as Map<String, dynamic>?;
@@ -190,35 +160,23 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
       await _projectDao.updateState(projectId, 'storyboarding');
 
       // Stage 3: Storyboarding
-      setState(() {
-        _currentStage = '分镜';
-        _statusText = '正在生成分镜...';
-      });
-      await AppLogger.info(
-        'Stage started',
-        data: {
-          'projectId': projectId,
-          'stage': 'storyboarding',
-        },
-      );
+      final storyboardStage = StageProgress(label: '分镜', icon: Icons.view_carousel);
+      setState(() => _stages.add(storyboardStage));
       agentCtx.data['currentStage'] = 'storyboarding';
-      result = await director.runStoryboarding(agentCtx);
+
+      result = await director.runStoryboarding(
+        agentCtx,
+        onEvent: (event) => _onStageEvent(storyboardStage, event),
+      );
       if (!result.success) {
-        await _showError(
-          '分镜生成失败: ${result.error}',
-          projectId: projectId,
-          stage: 'storyboarding',
+        storyboardStage.status = 'error';
+        storyboardStage.feedback = result.error;
+        setState(() {});
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('分镜生成失败: ${result.error}')),
         );
         return;
       }
-      await AppLogger.info(
-        'Stage completed',
-        data: {
-          'projectId': projectId,
-          'stage': 'storyboarding',
-          'resultType': result.data?.runtimeType.toString(),
-        },
-      );
 
       final storyboardData = result.data as Map<String, dynamic>?;
       if (storyboardData != null) {
@@ -251,12 +209,20 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
         );
       }
     } catch (e, st) {
-      await _showError(
-        '创建失败: $e',
+      await AppLogger.error(
+        'Project creation failed',
+        data: {
+          'userMessage': '创建失败: $e',
+        },
         error: e,
         stackTrace: st,
-        stage: _currentStage,
       );
+      if (mounted) {
+        setState(() => _creating = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('创建失败: $e')),
+        );
+      }
     } finally {
       if (mounted) {
         setState(() => _creating = false);
@@ -264,32 +230,89 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
     }
   }
 
-  Future<void> _showError(
-    String message, {
-    String? projectId,
-    String? stage,
-    Object? error,
-    StackTrace? stackTrace,
-  }) async {
-    await AppLogger.error(
-      'Project creation failed',
-      data: {
-        'projectId': projectId,
-        'stage': stage,
-        'userMessage': message,
-      },
-      error: error ?? message,
-      stackTrace: stackTrace,
-    );
-
-    if (mounted) {
-      setState(() => _creating = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('$message\n日志: ${AppLogger.logFilePath}'),
-        ),
-      );
-    }
+  void _onStageEvent(StageProgress stage, StageEvent event) {
+    if (!mounted) return;
+    setState(() {
+      switch (event.type) {
+        case StageEventType.started:
+          stage.status = 'running';
+          stage.messages.add(_ProgressMessage(
+            type: 'info',
+            text: '开始生成...',
+          ));
+          break;
+        case StageEventType.retryAttempt:
+          stage.messages.add(_ProgressMessage(
+            type: 'warn',
+            text: '第 ${event.attempt} 次重试中...',
+          ));
+          break;
+        case StageEventType.generating:
+          stage.messages.add(_ProgressMessage(
+            type: 'info',
+            text: '正在生成内容...',
+          ));
+          break;
+        case StageEventType.generated:
+          if (event.content != null) {
+            stage.contentPreview = event.content!;
+          }
+          stage.messages.add(_ProgressMessage(
+            type: 'success',
+            text: '内容生成完成',
+          ));
+          break;
+        case StageEventType.reviewing:
+          stage.messages.add(_ProgressMessage(
+            type: 'info',
+            text: 'DirectorAgent 审阅中...',
+          ));
+          break;
+        case StageEventType.reviewPassed:
+          stage.messages.add(_ProgressMessage(
+            type: 'success',
+            text: '✓ 审阅通过（评分: ${event.score}/10）',
+          ));
+          if (event.feedback != null && event.feedback!.isNotEmpty) {
+            stage.messages.add(_ProgressMessage(
+              type: 'note',
+              text: event.feedback!,
+            ));
+          }
+          stage.status = 'done';
+          break;
+        case StageEventType.reviewFailed:
+          stage.messages.add(_ProgressMessage(
+            type: 'error',
+            text: '✗ 审阅未通过（评分: ${event.score}/10）',
+          ));
+          if (event.feedback != null) {
+            stage.messages.add(_ProgressMessage(
+              type: 'warn',
+              text: '修改建议：${event.feedback}',
+            ));
+          }
+          break;
+        case StageEventType.error:
+          stage.status = 'error';
+          stage.feedback = event.feedback;
+          stage.messages.add(_ProgressMessage(
+            type: 'error',
+            text: '错误：${event.feedback}',
+          ));
+          break;
+        case StageEventType.completed:
+          stage.status = 'done';
+          break;
+        case StageEventType.exhausted:
+          stage.status = 'warn';
+          stage.messages.add(_ProgressMessage(
+            type: 'warn',
+            text: '已达到最大重试次数',
+          ));
+          break;
+      }
+    });
   }
 
   @override
@@ -301,9 +324,10 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            // Prompt input (disabled while creating)
             TextField(
               controller: _promptController,
-              maxLines: 5,
+              maxLines: 4,
               readOnly: _creating,
               decoration: const InputDecoration(
                 labelText: '创意描述',
@@ -313,24 +337,46 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
               ),
             ),
             const SizedBox(height: 16),
-            if (_creating) ...[
-              LinearProgressIndicator(
-                value: _statusText.isEmpty
-                    ? null
-                    : {'策划': 0.2, '编剧': 0.5, '分镜': 0.8}[_currentStage] ?? 0.1,
-              ),
-              const SizedBox(height: 8),
-              Text(
-                '$_currentStage: $_statusText',
-                style: const TextStyle(color: Colors.grey),
-              ),
-              const SizedBox(height: 16),
-              const Center(child: CircularProgressIndicator()),
-            ],
-            const Spacer(),
+
+            // Live progress area
+            Expanded(
+              child: _stages.isEmpty
+                  ? const Center(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.auto_awesome, size: 48, color: Colors.grey),
+                          SizedBox(height: 12),
+                          Text(
+                            '输入创意后，AI 将逐步为你生成策划、编剧和分镜',
+                            style: TextStyle(color: Colors.grey),
+                            textAlign: TextAlign.center,
+                          ),
+                        ],
+                      ),
+                    )
+                  : ListView(
+                      children: _stages
+                          .map((s) => _buildStageCard(s))
+                          .toList(),
+                    ),
+            ),
+
+            const SizedBox(height: 16),
+
+            // Start button
             FilledButton.icon(
               onPressed: _creating ? null : _createProject,
-              icon: const Icon(Icons.auto_awesome),
+              icon: _creating
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Colors.white,
+                      ),
+                    )
+                  : const Icon(Icons.auto_awesome),
               label: Text(_creating ? '生成中...' : '开始生成'),
             ),
           ],
@@ -339,10 +385,198 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
     );
   }
 
+  Widget _buildStageCard(StageProgress stage) {
+    final isRunning = stage.status == 'running';
+    final isDone = stage.status == 'done';
+    final isError = stage.status == 'error';
+
+    Color borderColor;
+    if (isRunning) {
+      borderColor = Colors.blue;
+    } else if (isDone) {
+      borderColor = Colors.green;
+    } else if (isError) {
+      borderColor = Colors.red;
+    } else {
+      borderColor = Colors.grey.shade700;
+    }
+
+    return Card(
+      margin: const EdgeInsets.symmetric(vertical: 6),
+      clipBehavior: Clip.antiAlias,
+      child: Container(
+        decoration: BoxDecoration(
+          border: Border(left: BorderSide(color: borderColor, width: 3)),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(
+                    stage.icon,
+                    size: 20,
+                    color: borderColor,
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    stage.label,
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 16,
+                      color: borderColor,
+                    ),
+                  ),
+                  const Spacer(),
+                  if (isRunning)
+                    const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    ),
+                  if (isDone)
+                    const Icon(Icons.check_circle, color: Colors.green, size: 18),
+                  if (isError)
+                    const Icon(Icons.error, color: Colors.red, size: 18),
+                ],
+              ),
+
+              // Status indicator text
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Text(
+                  _statusLabel(stage),
+                  style: const TextStyle(fontSize: 12, color: Colors.grey),
+                ),
+              ),
+
+              // Expandable messages
+              if (stage.messages.isNotEmpty) ...[
+                const SizedBox(height: 8),
+                _buildMessageList(stage),
+              ],
+
+              // Content preview
+              if (stage.contentPreview.isNotEmpty) ...[
+                const SizedBox(height: 8),
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: Colors.grey.shade900,
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: SelectableText(
+                    stage.contentPreview,
+                    style: const TextStyle(fontSize: 13),
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMessageList(StageProgress stage) {
+    return Container(
+      padding: const EdgeInsets.all(8),
+      decoration: BoxDecoration(
+        color: Colors.grey.shade900,
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: stage.messages
+            .map((m) => _buildMessage(m))
+            .toList(),
+      ),
+    );
+  }
+
+  Widget _buildMessage(_ProgressMessage m) {
+    Color color;
+    String icon;
+    switch (m.type) {
+      case 'success':
+        color = Colors.green;
+        icon = '✓';
+        break;
+      case 'error':
+        color = Colors.red;
+        icon = '✗';
+        break;
+      case 'warn':
+        color = Colors.orange;
+        icon = '→';
+        break;
+      case 'note':
+        color = Colors.grey;
+        icon = '  ';
+        break;
+      default:
+        color = Colors.blue;
+        icon = '○';
+    }
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 1),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(icon, style: TextStyle(color: color, fontSize: 12)),
+          const SizedBox(width: 6),
+          Expanded(
+            child: SelectableText(
+              m.text,
+              style: TextStyle(color: color, fontSize: 12),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _statusLabel(StageProgress stage) {
+    switch (stage.status) {
+      case 'running':
+        return '进行中...';
+      case 'done':
+        return '已完成';
+      case 'error':
+        return '失败';
+      case 'warn':
+        return '部分完成';
+      default:
+        return '等待中';
+    }
+  }
+
   @override
   void dispose() {
     _promptController.dispose();
     _llm.dispose();
     super.dispose();
   }
+}
+
+/// Tracks the progress of a single workflow stage
+class StageProgress {
+  final String label;
+  final IconData icon;
+  final List<_ProgressMessage> messages = [];
+  String contentPreview = '';
+  String status = 'pending'; // pending, running, done, error, warn
+  String? feedback;
+
+  StageProgress({required this.label, required this.icon});
+}
+
+/// A single progress message within a stage
+class _ProgressMessage {
+  final String type; // info, success, error, warn, note
+  final String text;
+
+  _ProgressMessage({required this.type, required this.text});
 }

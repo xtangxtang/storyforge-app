@@ -104,6 +104,257 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
     }
   }
 
+  /// Show dialog to edit storyboard fields
+  Future<void> _editStoryboard(Storyboard sb) async {
+    final descCtrl = TextEditingController(text: sb.description ?? '');
+    final firstFrameCtrl = TextEditingController(text: sb.firstFramePrompt ?? '');
+    final videoCtrl = TextEditingController(text: sb.videoPrompt ?? '');
+    final durationCtrl = TextEditingController(text: '${sb.duration ?? 5}');
+
+    final shotTypes = ['close-up', 'medium', 'wide', 'extreme-close-up'];
+    final cameraMoves = ['static', 'pan', 'zoom', 'tilt', 'dolly'];
+
+    int selectedShotType = shotTypes.indexOf(sb.shotType ?? 'medium');
+    if (selectedShotType < 0) selectedShotType = 1;
+
+    int selectedCameraMove = cameraMoves.indexOf(sb.cameraMove ?? 'static');
+    if (selectedCameraMove < 0) selectedCameraMove = 0;
+
+    final result = await showDialog<Map<String, dynamic>>(
+      context: context,
+      builder: (ctx) => Dialog(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 600),
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    CircleAvatar(
+                      radius: 14,
+                      child: Text(
+                        '${sb.sceneNum}-${sb.shotNum}',
+                        style: const TextStyle(fontSize: 11),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    const Text(
+                      '编辑分镜',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const Spacer(),
+                    IconButton(
+                      icon: const Icon(Icons.close),
+                      onPressed: () => Navigator.pop(ctx),
+                    ),
+                  ],
+                ),
+                const Divider(),
+                Flexible(
+                  child: SingleChildScrollView(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        // Scene & Shot number (read-only)
+                        _editField(
+                          label: '场景-镜头',
+                          value: '${sb.sceneNum}-${sb.shotNum}',
+                          readOnly: true,
+                        ),
+                        // Description
+                        _editTextField(
+                          label: '画面描述',
+                          controller: descCtrl,
+                          maxLines: 3,
+                        ),
+                        // Shot type dropdown
+                        _editDropdown(
+                          label: '镜头类型',
+                          value: shotTypes[selectedShotType],
+                          items: shotTypes,
+                          onChanged: (v) => selectedShotType = shotTypes.indexOf(v!),
+                        ),
+                        // Camera move dropdown
+                        _editDropdown(
+                          label: '运镜方式',
+                          value: cameraMoves[selectedCameraMove],
+                          items: cameraMoves,
+                          onChanged: (v) =>
+                              selectedCameraMove = cameraMoves.indexOf(v!),
+                        ),
+                        // Duration
+                        _editTextField(
+                          label: '时长 (秒)',
+                          controller: durationCtrl,
+                          keyboardType: TextInputType.number,
+                        ),
+                        // First frame prompt
+                        _editTextField(
+                          label: '首帧图提示词',
+                          controller: firstFrameCtrl,
+                          maxLines: 3,
+                          hint: '用于 wan2.7-image 生成首帧',
+                        ),
+                        // Video prompt
+                        _editTextField(
+                          label: '视频提示词',
+                          controller: videoCtrl,
+                          maxLines: 3,
+                          hint: '用于 wan2.7-i2v 生成视频',
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    TextButton(
+                      onPressed: () => Navigator.pop(ctx),
+                      child: const Text('取消'),
+                    ),
+                    const SizedBox(width: 8),
+                    FilledButton(
+                      onPressed: () {
+                        Navigator.pop(ctx, {
+                          'description': descCtrl.text,
+                          'firstFramePrompt': firstFrameCtrl.text,
+                          'videoPrompt': videoCtrl.text,
+                          'shotType': shotTypes[selectedShotType],
+                          'cameraMove': cameraMoves[selectedCameraMove],
+                          'duration': int.tryParse(durationCtrl.text) ?? 5,
+                        });
+                      },
+                      child: const Text('保存'),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+
+    descCtrl.dispose();
+    firstFrameCtrl.dispose();
+    videoCtrl.dispose();
+    durationCtrl.dispose();
+
+    if (result != null && mounted) {
+      await StoryboardDao().update(sb.id, {
+        'description': result['description'],
+        'first_frame_prompt': result['firstFramePrompt'],
+        'video_prompt': result['videoPrompt'],
+        'shot_type': result['shotType'],
+        'camera_move': result['cameraMove'],
+        'duration': result['duration'],
+      });
+      // Update local state
+      setState(() {
+        final idx = _storyboards.indexWhere((s) => s.id == sb.id);
+        if (idx >= 0) {
+          _storyboards[idx] = Storyboard(
+            id: _storyboards[idx].id,
+            projectId: _storyboards[idx].projectId,
+            sceneNum: _storyboards[idx].sceneNum,
+            shotNum: _storyboards[idx].shotNum,
+            shotType: result['shotType'] as String,
+            cameraMove: result['cameraMove'] as String,
+            description: result['description'] as String,
+            firstFramePrompt: result['firstFramePrompt'] as String,
+            videoPrompt: result['videoPrompt'] as String,
+            duration: result['duration'] as int,
+            assets: _storyboards[idx].assets,
+            state: _storyboards[idx].state,
+            createdAt: _storyboards[idx].createdAt,
+          );
+        }
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('分镜已更新')),
+      );
+    }
+  }
+
+  Widget _editField({
+    required String label,
+    required String value,
+    bool readOnly = false,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(label, style: const TextStyle(fontSize: 12, color: Colors.grey)),
+          Text(value, style: const TextStyle(fontSize: 14)),
+        ],
+      ),
+    );
+  }
+
+  Widget _editTextField({
+    required String label,
+    required TextEditingController controller,
+    int maxLines = 1,
+    TextInputType? keyboardType,
+    String? hint,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(label, style: const TextStyle(fontSize: 12, color: Colors.grey)),
+          TextField(
+            controller: controller,
+            maxLines: maxLines,
+            keyboardType: keyboardType,
+            decoration: InputDecoration(
+              hintText: hint,
+              border: const OutlineInputBorder(),
+              contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _editDropdown({
+    required String label,
+    required String value,
+    required List<String> items,
+    required ValueChanged<String?> onChanged,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(label, style: const TextStyle(fontSize: 12, color: Colors.grey)),
+          DropdownButtonFormField<String>(
+            value: value,
+            items: items.map((e) => DropdownMenuItem(value: e, child: Text(e))).toList(),
+            onChanged: onChanged,
+            decoration: const InputDecoration(
+              border: OutlineInputBorder(),
+              contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_loading) {
@@ -199,15 +450,25 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
 
                         return Card(
                           margin: const EdgeInsets.symmetric(vertical: 4),
-                          child: ListTile(
-                            leading: CircleAvatar(
-                              child: Text('${sb.sceneNum}-${sb.shotNum}'),
+                          child: InkWell(
+                            onTap: () => _editStoryboard(sb),
+                            child: ListTile(
+                              leading: CircleAvatar(
+                                child: Text('${sb.sceneNum}-${sb.shotNum}'),
+                              ),
+                              title: Text(sb.description ?? ''),
+                              subtitle: Text(
+                                '${sb.shotType} | ${sb.cameraMove} | ${sb.duration ?? 5}s',
+                              ),
+                              trailing: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  _buildVideoStatus(clip),
+                                  const SizedBox(width: 8),
+                                  const Icon(Icons.edit, size: 18, color: Colors.grey),
+                                ],
+                              ),
                             ),
-                            title: Text(sb.description ?? ''),
-                            subtitle: Text(
-                              '${sb.shotType} | ${sb.cameraMove} | ${sb.duration ?? 5}s',
-                            ),
-                            trailing: _buildVideoStatus(clip),
                           ),
                         );
                       }).toList(),

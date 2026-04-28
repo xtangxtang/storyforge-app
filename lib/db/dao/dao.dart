@@ -56,7 +56,11 @@ class BriefDao {
 
   Future<Brief?> getByProjectId(String projectId) async {
     final db = await _db.database;
-    final maps = await db.query('briefs', where: 'project_id = ?', whereArgs: [projectId]);
+    final maps = await db.query(
+      'briefs',
+      where: 'project_id = ?',
+      whereArgs: [projectId],
+    );
     if (maps.isEmpty) return null;
     return Brief.fromMap(maps.first);
   }
@@ -72,7 +76,11 @@ class ScriptDao {
 
   Future<Script?> getByProjectId(String projectId) async {
     final db = await _db.database;
-    final maps = await db.query('scripts', where: 'project_id = ?', whereArgs: [projectId]);
+    final maps = await db.query(
+      'scripts',
+      where: 'project_id = ?',
+      whereArgs: [projectId],
+    );
     if (maps.isEmpty) return null;
     return Script.fromMap(maps.first);
   }
@@ -138,7 +146,17 @@ class StoryboardDao {
 
   Future<void> updateState(String id, String state) async {
     final db = await _db.database;
-    await db.update('storyboards', {'state': state}, where: 'id = ?', whereArgs: [id]);
+    await db.update(
+      'storyboards',
+      {'state': state},
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
+
+  Future<void> update(String id, Map<String, dynamic> updates) async {
+    final db = await _db.database;
+    await db.update('storyboards', updates, where: 'id = ?', whereArgs: [id]);
   }
 }
 
@@ -172,7 +190,11 @@ class FinalCutDao {
 
   Future<FinalCut?> getByProjectId(String projectId) async {
     final db = await _db.database;
-    final maps = await db.query('final_cuts', where: 'project_id = ?', whereArgs: [projectId]);
+    final maps = await db.query(
+      'final_cuts',
+      where: 'project_id = ?',
+      whereArgs: [projectId],
+    );
     if (maps.isEmpty) return null;
     return FinalCut.fromMap(maps.first);
   }

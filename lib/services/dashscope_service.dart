@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:async';
 import 'dart:io';
 import 'package:http/http.dart' as http;
+
 import '../config/app_config.dart';
 import 'http_client_factory.dart';
 
@@ -30,7 +31,6 @@ class DashscopeService {
     final headers = {
       'Content-Type': 'application/json',
       'Authorization': 'Bearer $apiKey',
-      'X-DashScope-Async': 'enable',
     };
     final body = jsonEncode({
       'model': 'wan2.7-image',
@@ -163,7 +163,6 @@ class DashscopeService {
     final headers = {
       'Content-Type': 'application/json',
       'Authorization': 'Bearer $apiKey',
-      'X-DashScope-Async': 'enable',
     };
     final body = jsonEncode({
       'model': 'wan2.7-i2v',
