@@ -33,12 +33,31 @@ Storyforge 通过 5 个 AI Agent 协作，将创意转化为短片：
 - [DashScope API Key](https://bailian.console.aliyun.com/)（需开通 qwen3.6-plus、wan2.7-image、wan2.7-i2v）
 - Flutter 3.27+（仅源码编译需要）
 
+### 网络配置（国内环境必配）
+
+如果 `flutter pub get` 卡住不动，请设置国内镜像或代理：
+
+**方式一：使用国内镜像（推荐）**
+```powershell
+$env:PUB_HOSTED_URL="https://pub.flutter-io.cn"
+$env:FLUTTER_STORAGE_BASE_URL="https://storage.flutter-io.cn"
+flutter pub get
+```
+
+**方式二：使用公司代理**
+```powershell
+$env:HTTPS_PROXY="http://proxy.your-company.com:port"
+$env:HTTP_PROXY="http://proxy.your-company.com:port"
+flutter pub get
+```
+
+> 二选一即可，镜像方式通常更快。代理地址请替换为你公司的实际代理域名和端口。
+
 ### 从源码编译
 
 ```bash
 git clone https://github.com/xtangxtang/storyforge-app.git
 cd storyforge-app
-flutter pub get
 
 # 运行开发版
 flutter run -d windows    # Windows 桌面
@@ -55,7 +74,7 @@ flutter build apk --release
 
 ```
 lib/
-├── main.dart                     # 入口
+── main.dart                     # 入口
 ├── config/
 │   └── app_config.dart           # API Key 管理
 ├── core/
@@ -65,7 +84,7 @@ lib/
 ├── services/
 │   ├── llm_service.dart          # LLM 调用（qwen3.6-plus）
 │   └── dashscope_service.dart    # wan2.7 图像/视频生成
-├── models/
+── models/
 │   └── models.dart               # 数据模型
 ├── db/
 │   ├── database.dart             # SQLite 初始化

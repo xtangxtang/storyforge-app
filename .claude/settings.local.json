@@ -1,0 +1,37 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(dart analyze *)",
+      "WebFetch(domain:seedance.io)",
+      "WebFetch(domain:medium.com)",
+      "WebFetch(domain:www.nxcode.io)",
+      "WebFetch(domain:help.apiyi.com)",
+      "WebSearch",
+      "WebFetch(domain:pub.dev)",
+      "Bash(flutter pub *)",
+      "Bash(flutter run *)",
+      "Bash(flutter clean *)",
+      "Bash(taskkill /F /IM storyforge_app.exe)",
+      "Bash(taskkill /F /IM flutter.exe)",
+      "Bash(tasklist)",
+      "Bash(findstr -i \"storyforge\\\\|flutter\")",
+      "Bash(flutter build *)",
+      "Bash(cmake --build C:/Users/xtang29/storyforge-app/build/windows/x64 --parallel 1)",
+      "Bash(./build/windows/x64/runner/Debug/storyforge_app.exe *)",
+      "Bash(where ffmpeg *)",
+      "WebFetch(domain:help.aliyun.com)",
+      "Bash(grep -n '\\\\\\\\\\\\\\\\?\\\\|\\\\\\\\\\\\$' lib/screens/seedance_web_screen.dart)",
+      "Bash(grep -v '\\\\\\\\\\\\$')",
+      "Bash(head -514 lib/core/agents.dart)",
+      "Bash(cat lib/core/agents_videotemp.dart)",
+      "Bash(mv lib/core/agents_combined.dart lib/core/agents.dart)",
+      "Bash(rm lib/core/agents_videotemp.dart lib/core/agents_new.dart)",
+      "Bash(taskkill //IM storyforge_app.exe //F)",
+      "Bash(findstr storyforge *)",
+      "Bash(taskkill *)",
+      "Bash(cmd.exe /c \"taskkill /F /IM storyforge_app.exe\")",
+      "Bash(C:\\\\Windows\\\\System32\\\\taskkill.exe *)",
+      "Bash(powershell *)"
+    ]
+  }
+}

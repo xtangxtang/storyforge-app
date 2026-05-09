@@ -5,6 +5,8 @@ class AppDatabase {
   static final AppDatabase _instance = AppDatabase._internal();
   static Database? _database;
 
+  static const int _currentVersion = 3;
+
   AppDatabase._internal();
 
   factory AppDatabase() => _instance;
@@ -20,8 +22,9 @@ class AppDatabase {
 
     return openDatabase(
       path,
-      version: 1,
+      version: _currentVersion,
       onCreate: _onCreate,
+      onUpgrade: _onUpgrade,
     );
   }
 
@@ -73,6 +76,7 @@ class AppDatabase {
         description TEXT,
         prompt TEXT,
         reference_image_url TEXT,
+        reference_image_local_path TEXT,
         state TEXT NOT NULL DEFAULT 'pending',
         created_at INTEGER NOT NULL
       )
@@ -92,7 +96,10 @@ class AppDatabase {
         duration INTEGER,
         assets TEXT,
         state TEXT NOT NULL DEFAULT 'pending',
-        created_at INTEGER NOT NULL
+        created_at INTEGER NOT NULL,
+        reference_image_url TEXT,
+        reference_image_local_path TEXT,
+        reference_image_urls TEXT
       )
     ''');
 
@@ -136,6 +143,30 @@ class AppDatabase {
     ''');
   }
 
+  Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
+    if (oldVersion < 2) {
+      await db.execute('''
+        ALTER TABLE storyboards
+        ADD COLUMN reference_image_url TEXT
+      ''');
+      await db.execute('''
+        ALTER TABLE storyboards
+        ADD COLUMN reference_image_urls TEXT
+      ''');
+    }
+
+    if (oldVersion < 3) {
+      await db.execute('''
+        ALTER TABLE assets
+        ADD COLUMN reference_image_local_path TEXT
+      ''');
+      await db.execute('''
+        ALTER TABLE storyboards
+        ADD COLUMN reference_image_local_path TEXT
+      ''');
+    }
+  }
+
   Future<void> close() async {
     final db = await database;
     await db.close();
@@ -149,6 +180,6 @@ class AppDatabase {
     ]) {
       await db.execute('DROP TABLE IF EXISTS $table');
     }
-    await _onCreate(db, 1);
+    await _onCreate(db, _currentVersion);
   }
 }

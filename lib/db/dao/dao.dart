@@ -1,5 +1,7 @@
+import 'dart:convert';
 import '../database.dart';
 import '../../models/models.dart';
+import 'package:sqflite/sqflite.dart';
 
 class ProjectDao {
   final AppDatabase _db = AppDatabase();
@@ -67,7 +69,7 @@ class BriefDao {
 
   Future<void> insert(Brief brief) async {
     final db = await _db.database;
-    await db.insert('briefs', brief.toMap());
+    await db.insert('briefs', brief.toMap(), conflictAlgorithm: ConflictAlgorithm.replace);
   }
 }
 
@@ -87,7 +89,7 @@ class ScriptDao {
 
   Future<void> insert(Script script) async {
     final db = await _db.database;
-    await db.insert('scripts', script.toMap());
+    await db.insert('scripts', script.toMap(), conflictAlgorithm: ConflictAlgorithm.replace);
   }
 }
 
@@ -113,8 +115,30 @@ class AssetDao {
   Future<void> insertAll(List<Asset> assets) async {
     final db = await _db.database;
     for (final asset in assets) {
-      await db.insert('assets', asset.toMap());
+      await db.insert('assets', asset.toMap(), conflictAlgorithm: ConflictAlgorithm.replace);
     }
+  }
+
+  Future<void> updateReferenceImage(
+    String assetId, {
+    String? imageUrl,
+    String? localPath,
+  }) async {
+    final db = await _db.database;
+    final updates = <String, dynamic>{};
+    if (imageUrl != null) updates['reference_image_url'] = imageUrl;
+    if (localPath != null) updates['reference_image_local_path'] = localPath;
+    if (updates.isEmpty) return;
+    await db.update(
+      'assets',
+      updates,
+      where: 'id = ?',
+      whereArgs: [assetId],
+    );
+  }
+
+  Future<void> updateReferenceImageUrl(String assetId, String imageUrl) async {
+    await updateReferenceImage(assetId, imageUrl: imageUrl);
   }
 }
 
@@ -140,7 +164,7 @@ class StoryboardDao {
   Future<void> insertAll(List<Storyboard> sbs) async {
     final db = await _db.database;
     for (final sb in sbs) {
-      await db.insert('storyboards', sb.toMap());
+      await db.insert('storyboards', sb.toMap(), conflictAlgorithm: ConflictAlgorithm.replace);
     }
   }
 
@@ -158,7 +182,38 @@ class StoryboardDao {
     final db = await _db.database;
     await db.update('storyboards', updates, where: 'id = ?', whereArgs: [id]);
   }
+
+  Future<void> updateImageUrl(String id, String imageUrl, {String? localPath}) async {
+    final db = await _db.database;
+    await db.update(
+      'storyboards',
+      {
+        'reference_image_url': imageUrl,
+        if (localPath != null) 'reference_image_local_path': localPath,
+        'state': 'image_ready',
+      },
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
+
+  /// Update multiple image URLs (for sequential/group mode).
+  /// Also sets the first image as reference_image_url for backward compatibility.
+  Future<void> updateImageUrls(String id, List<String> imageUrls) async {
+    final db = await _db.database;
+    await db.update(
+      'storyboards',
+      {
+        'reference_image_url': imageUrls.isNotEmpty ? imageUrls[0] : null,
+        'reference_image_urls': imageUrls.isNotEmpty ? jsonEncode(imageUrls) : null,
+        'state': 'image_ready',
+      },
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
 }
+
 
 class VideoClipDao {
   final AppDatabase _db = AppDatabase();
@@ -207,5 +262,29 @@ class FinalCutDao {
   Future<void> update(String id, Map<String, dynamic> updates) async {
     final db = await _db.database;
     await db.update('final_cuts', updates, where: 'id = ?', whereArgs: [id]);
+  }
+}
+
+class TaskDao {
+  final AppDatabase _db = AppDatabase();
+
+  Future<List<Map<String, dynamic>>> getByProjectId(String projectId) async {
+    final db = await _db.database;
+    return db.query(
+      'tasks',
+      where: 'project_id = ?',
+      whereArgs: [projectId],
+      orderBy: 'created_at',
+    );
+  }
+
+  Future<void> insert(Map<String, dynamic> task) async {
+    final db = await _db.database;
+    await db.insert('tasks', task);
+  }
+
+  Future<void> update(String id, Map<String, dynamic> updates) async {
+    final db = await _db.database;
+    await db.update('tasks', updates, where: 'id = ?', whereArgs: [id]);
   }
 }

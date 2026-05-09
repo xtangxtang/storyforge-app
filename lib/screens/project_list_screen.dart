@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import '../db/dao/dao.dart';
 import '../models/models.dart';
 import 'create_project_screen.dart';
-import 'project_detail_screen.dart';
 
 class ProjectListScreen extends StatefulWidget {
   const ProjectListScreen({super.key});
@@ -132,20 +131,53 @@ class _ProjectListScreenState extends State<ProjectListScreen> {
   }
 
   void _navigateToCreate() async {
-    final created = await Navigator.push<bool>(
+    final result = await Navigator.push<bool>(
       context,
       MaterialPageRoute(builder: (_) => const CreateProjectScreen()),
     );
-    if (created == true) {
+    if (result == true) {
       await _loadProjects();
     }
   }
 
   void _navigateToProject(Project project) async {
+    // Check if project is in creation (not yet generating/done)
+    if (['planning', 'scripting', 'storyboarding'].contains(project.state)) {
+      final action = await showDialog<String>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('项目创建中'),
+          content: Text('项目 "${project.name}" 尚未完成创作，当前处于"${_stateLabel(project.state)}"阶段。\n\n你可以继续生成，或查看详情。'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, 'detail'),
+              child: const Text('查看详情'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx, 'continue'),
+              child: const Text('继续生成'),
+            ),
+          ],
+        ),
+      );
+      if (action == 'continue') {
+        final result = await Navigator.push<bool>(
+          context,
+          MaterialPageRoute(
+            builder: (_) => CreateProjectScreen(resumeProject: project),
+          ),
+        );
+        if (result == true) {
+          await _loadProjects();
+        }
+        return;
+      }
+    }
+
     await Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (_) => ProjectDetailScreen(project: project),
+        builder: (_) => CreateProjectScreen(resumeProject: project),
       ),
     );
     await _loadProjects();

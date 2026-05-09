@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 class Project {
   final String id;
   final String name;
@@ -191,6 +193,7 @@ class Asset {
   final String? description;
   final String? prompt;
   final String? referenceImageUrl;
+  final String? referenceImageLocalPath;
   final String state;
   final int createdAt;
 
@@ -202,6 +205,7 @@ class Asset {
     this.description,
     this.prompt,
     this.referenceImageUrl,
+    this.referenceImageLocalPath,
     this.state = 'pending',
     required this.createdAt,
   });
@@ -215,6 +219,7 @@ class Asset {
       description: map['description'] as String?,
       prompt: map['prompt'] as String?,
       referenceImageUrl: map['reference_image_url'] as String?,
+      referenceImageLocalPath: map['reference_image_local_path'] as String?,
       state: map['state'] as String? ?? 'pending',
       createdAt: map['created_at'] as int? ?? 0,
     );
@@ -229,6 +234,7 @@ class Asset {
       'description': description,
       'prompt': prompt,
       'reference_image_url': referenceImageUrl,
+      'reference_image_local_path': referenceImageLocalPath,
       'state': state,
       'created_at': createdAt,
     };
@@ -250,6 +256,16 @@ class Storyboard {
   final String state;
   final int createdAt;
 
+  /// Single reference image (for backward compatibility).
+  final String? referenceImageUrl;
+
+  /// Locally cached reference image path for offline/restart-safe reuse.
+  final String? referenceImageLocalPath;
+
+  /// Multiple reference images for sequential/group mode.
+  /// Stored as JSON string in DB, parsed to List<String>.
+  final List<String>? referenceImageUrls;
+
   Storyboard({
     required this.id,
     required this.projectId,
@@ -264,14 +280,27 @@ class Storyboard {
     this.assets,
     this.state = 'pending',
     required this.createdAt,
+    this.referenceImageUrl,
+    this.referenceImageLocalPath,
+    this.referenceImageUrls,
   });
 
   factory Storyboard.fromMap(Map<String, dynamic> map) {
+    final imageUrl = map['reference_image_url'] as String?;
+    final imageLocalPath = map['reference_image_local_path'] as String?;
+    final imageUrlsJson = map['reference_image_urls'] as String?;
+    List<String>? imageUrls;
+    if (imageUrlsJson != null && imageUrlsJson.isNotEmpty) {
+      try {
+        final decoded = jsonDecode(imageUrlsJson) as List;
+        imageUrls = decoded.map((e) => e.toString()).toList();
+      } catch (_) {}
+    }
     return Storyboard(
       id: map['id'] as String,
       projectId: map['project_id'] as String,
-      sceneNum: map['scene_num'] as int? ?? 0,
-      shotNum: map['shot_num'] as int? ?? 0,
+      sceneNum: (map['scene_num'] as num?)?.toInt() ?? 0,
+      shotNum: (map['shot_num'] as num?)?.toInt() ?? 0,
       shotType: map['shot_type'] as String?,
       cameraMove: map['camera_move'] as String?,
       description: map['description'] as String?,
@@ -281,6 +310,9 @@ class Storyboard {
       assets: map['assets'] as String?,
       state: map['state'] as String? ?? 'pending',
       createdAt: map['created_at'] as int? ?? 0,
+      referenceImageUrl: imageUrl,
+      referenceImageLocalPath: imageLocalPath,
+      referenceImageUrls: imageUrls,
     );
   }
 
@@ -299,6 +331,11 @@ class Storyboard {
       'assets': assets,
       'state': state,
       'created_at': createdAt,
+      'reference_image_url': referenceImageUrl,
+      'reference_image_local_path': referenceImageLocalPath,
+      'reference_image_urls': referenceImageUrls != null
+          ? jsonEncode(referenceImageUrls)
+          : null,
     };
   }
 }

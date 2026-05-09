@@ -59,13 +59,68 @@ Brief 内容：
 输出严格 JSON：{"score": 1-10, "pass": true/false, "feedback": "修改建议（中文）"}''',
 
   'storyboard': '''请审阅以下分镜脚本，给出质量评估。
-评分维度：
-1. 分镜是否覆盖所有场景
-2. 每个分镜是否包含 scene_num, shot_num, first_frame_prompt, video_prompt
-3. first_frame_prompt 是否足够详细（光影、色调、构图）
-4. video_prompt 是否描述了动态（运镜、动作）
+
+【最高优先级】内容忠于剧本：
+1. 分镜中的角色姓名、身份必须与剧本完全一致，不得凭空创造新角色。
+2. 分镜中的场景地点必须与剧本中的场景一一对应，不得增加剧本中没有的地点。
+3. 分镜中的关键情节和事件必须与剧本一致，不得偏离剧本的核心故事线。
+4. 如果分镜与剧本在角色、地点、情节上有明显不符，评分必须为 1-3 分，必须打回。
+
+其他评分维度：
+5. 分镜是否覆盖了剧本中的所有场景（每个剧本场景至少有一个对应分镜）。
+6. 每个分镜是否包含 scene_num, shot_num, first_frame_prompt, video_prompt 等必要字段。
+7. first_frame_prompt 是否足够详细（光影、色调、构图、角色外貌）。
+8. video_prompt 是否描述了动态（运镜、动作、环境变化）。
+
+参考剧本：
+{script}
 
 分镜内容：
+{content}
+
+输出严格 JSON：{"score": 1-10, "pass": true/false, "feedback": "修改建议（中文）"}''',
+
+  'video': '''请审阅以下视频生成结果，给出质量评估。
+评分维度：
+1. 视频 clips 数量是否与分镜 storyboards 数量一致
+2. 成功生成的 clip 数量是否 >= 总数的一半
+3. 失败的 clip 是否有明确的 error_reason
+
+视频生成结果：
+{content}
+
+输出严格 JSON：{"score": 1-10, "pass": true/false, "feedback": "修改建议（中文）"}''',
+
+  'assets': '''请审阅以下资产设计结果，给出质量评估。
+
+【最高优先级规则 — 违反任何一条将导致评分必须为 1-3 分，必须打回】
+
+1. **角色描述必须具体明确**：
+   - 角色可以是人物、动物、物体或任何创意设定的存在
+   - 必须准确反映创意描述中对角色的定义和设定
+   - 必须描述核心外观特征（形状、颜色、材质、尺寸等）
+   - 必须描述关键视觉细节（用于区分该角色与其他类似事物）
+   - 禁止使用模糊描述如"一个东西"、"某个角色"
+   - 描述必须与创意描述中的角色设定一致
+   - 示例（人物）："男性青少年，16岁，圆脸，短发黑色，穿着白色校服衬衫"
+   - 示例（物体角色）："一个拟人化的包子角色，白色面团身体，带有笑脸表情，戴着红色厨师帽"
+
+2. **场景描述必须具体明确**：
+   - 必须明确场景类型（室内/室外/虚构空间等）
+   - 必须包含主要建筑物或环境特征
+   - 必须包含光线和色调描述
+   - 禁止使用模糊描述如"一个地方"、"某处"
+
+3. **道具描述必须具体明确**：
+   - 必须明确物品的具体类型
+   - 必须包含外观、材质、颜色描述
+   - 禁止使用模糊描述如"一个东西"、"某个物品"
+
+其他评分维度：
+4. 是否所有角色、场景和道具资产都有 reference_image_url
+5. 失败的比例是否过高
+
+资产设计结果：
 {content}
 
 输出严格 JSON：{"score": 1-10, "pass": true/false, "feedback": "修改建议（中文）"}''',
@@ -113,7 +168,9 @@ class DirectorAgent extends Agent {
 
   final PlanningAgent planningAgent;
   final ScriptAgent scriptAgent;
+  final AssetDesignAgent assetDesignAgent;
   final ProductionAgent productionAgent;
+  final VideoAgent videoAgent;
   final LlmService llm;
 
   static const int maxRetries = 3;
@@ -121,7 +178,9 @@ class DirectorAgent extends Agent {
   DirectorAgent({required this.llm})
       : planningAgent = PlanningAgent(llm: llm),
         scriptAgent = ScriptAgent(llm: llm),
-        productionAgent = ProductionAgent(llm: llm);
+        assetDesignAgent = AssetDesignAgent(),
+        productionAgent = ProductionAgent(llm: llm),
+        videoAgent = VideoAgent();
 
   @override
   Future<AgentResult> run(AgentContext context) async {
@@ -167,8 +226,13 @@ class DirectorAgent extends Agent {
   }
 
   Future<AgentResult> runAsseting(AgentContext context, {StageEventCallback? onEvent}) async {
-    // Assets are extracted from script output
-    return advanceIfOk(context, AgentResult.success({}), 'storyboarding');
+    return runStageWithReview(
+      context,
+      assetDesignAgent,
+      reviewContent: 'assets',
+      stageLabel: '资产设计',
+      onEvent: onEvent,
+    );
   }
 
   Future<AgentResult> runStoryboarding(AgentContext context, {StageEventCallback? onEvent}) async {
@@ -182,8 +246,13 @@ class DirectorAgent extends Agent {
   }
 
   Future<AgentResult> runGenerating(AgentContext context, {StageEventCallback? onEvent}) async {
-    // Video generation - handled separately by the UI/workflow
-    return advanceIfOk(context, AgentResult.success({}), 'cutting');
+    return runStageWithReview(
+      context,
+      videoAgent,
+      reviewContent: 'video',
+      stageLabel: '视频',
+      onEvent: onEvent,
+    );
   }
 
   Future<AgentResult> runCutting(AgentContext context, {StageEventCallback? onEvent}) async {
@@ -247,7 +316,8 @@ class DirectorAgent extends Agent {
           attempt: attempt + 1,
           feedback: lastResult.error,
         ));
-        return lastResult;
+        // Retry on agent error too (not just review failure)
+        continue;
       }
 
       // Notify that content was generated
@@ -269,6 +339,7 @@ class DirectorAgent extends Agent {
       final reviewResult = await _review(
         reviewContent,
         lastResult.data,
+        scriptText: context.data['scriptForReview'] as String?,
       );
 
       final reviewData = reviewResult.data;
@@ -422,12 +493,47 @@ class DirectorAgent extends Agent {
           return lines.join('\n');
         }
         return '';
+      case 'video':
+        final clips = data['clips'] as List?;
+        if (clips != null) {
+          final lines = <String>[];
+          for (final c in clips) {
+            if (c is Map<String, dynamic>) {
+              final sbId = c['storyboard_id'] ?? '?';
+              final state = c['state'] ?? '?';
+              final url = c['video_url'] as String?;
+              if (state == 'done' && url != null) {
+                lines.add('镜头$sbId: 已生成 ${url.substring(0, url.length.clamp(0, 40))}...');
+              } else {
+                lines.add('镜头$sbId: 失败 - ${c['error_reason'] ?? "未知"}');
+              }
+            }
+          }
+          return lines.join('\n');
+        }
+        return '';
+      case 'assets':
+        final assets = data['assets'] as List?;
+        if (assets != null) {
+          final lines = <String>[];
+          for (final a in assets) {
+            if (a is Map<String, dynamic>) {
+              final type = a['type'] == 'character' ? '角色' : (a['type'] == 'prop' ? '道具' : '场景');
+              final name = a['name'] ?? '?';
+              final refUrl = a['reference_image_url'] as String?;
+              final hasImage = refUrl != null && refUrl.isNotEmpty;
+              lines.add('$type: $name ${hasImage ? "✓" : "✗"}');
+            }
+          }
+          return lines.join('\n');
+        }
+        return '';
       default:
         return '';
     }
   }
 
-  Future<AgentResult> _review(String type, dynamic content) async {
+  Future<AgentResult> _review(String type, dynamic content, {String? scriptText}) async {
     final promptTemplate = _reviewPrompts[type];
     if (promptTemplate == null) {
       return AgentResult.success({});
@@ -435,10 +541,17 @@ class DirectorAgent extends Agent {
 
     final reviewContent = _toReviewableContent(content);
 
-    final prompt = promptTemplate.replaceFirst(
-      '{content}',
-      reviewContent is String ? reviewContent : jsonEncode(reviewContent),
-    );
+    String prompt;
+    if (type == 'storyboard' && scriptText != null) {
+      prompt = promptTemplate
+          .replaceFirst('{script}', scriptText)
+          .replaceFirst('{content}', reviewContent is String ? reviewContent : jsonEncode(reviewContent));
+    } else {
+      prompt = promptTemplate.replaceFirst(
+        '{content}',
+        reviewContent is String ? reviewContent : jsonEncode(reviewContent),
+      );
+    }
 
     try {
       final response = await llm.chatCompletion(
@@ -489,12 +602,13 @@ class DirectorAgent extends Agent {
     }
 
     if (value is Map) {
-      return value.map(
+      final result = value.map(
         (key, dynamic nestedValue) => MapEntry(
           key.toString(),
           _toReviewableContent(nestedValue),
         ),
       );
+      return Map<String, dynamic>.from(result);
     }
 
     return value.toString();
