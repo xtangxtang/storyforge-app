@@ -33,6 +33,39 @@ const List<WorkflowStage> stageOrder = [
   'done',
 ];
 
+class DirectorGuidanceQuestion {
+  final String id;
+  final String title;
+  final String question;
+  final String hint;
+  final bool required;
+
+  const DirectorGuidanceQuestion({
+    required this.id,
+    required this.title,
+    required this.question,
+    required this.hint,
+    required this.required,
+  });
+
+  factory DirectorGuidanceQuestion.fromMap(
+      Map<String, dynamic> map, int index) {
+    final fallbackTitle = '${index + 1}. 补全创作信息';
+    final rawId = map['id']?.toString().trim();
+    return DirectorGuidanceQuestion(
+      id: rawId != null && rawId.isNotEmpty ? rawId : 'question_$index',
+      title: map['title']?.toString().trim().isNotEmpty == true
+          ? map['title'].toString().trim()
+          : fallbackTitle,
+      question: map['question']?.toString().trim().isNotEmpty == true
+          ? map['question'].toString().trim()
+          : '请补充这部分创作信息。',
+      hint: map['hint']?.toString().trim() ?? '',
+      required: map['required'] is bool ? map['required'] as bool : true,
+    );
+  }
+}
+
 /// Review prompts for each stage type
 const _reviewPrompts = {
   'brief': '''请审阅以下短剧策划 Brief，给出质量评估。
@@ -45,7 +78,6 @@ Brief 内容：
 {content}
 
 输出严格 JSON：{"score": 1-10, "pass": true/false, "feedback": "修改建议（中文）"}''',
-
   'script': '''请审阅以下短剧剧本，给出质量评估。
 评分维度：
 1. 场景是否完整（2-5个场景）
@@ -57,7 +89,6 @@ Brief 内容：
 {content}
 
 输出严格 JSON：{"score": 1-10, "pass": true/false, "feedback": "修改建议（中文）"}''',
-
   'storyboard': '''请审阅以下分镜脚本，给出质量评估。
 
 【最高优先级】内容忠于剧本：
@@ -79,7 +110,6 @@ Brief 内容：
 {content}
 
 输出严格 JSON：{"score": 1-10, "pass": true/false, "feedback": "修改建议（中文）"}''',
-
   'video': '''请审阅以下视频生成结果，给出质量评估。
 评分维度：
 1. 视频 clips 数量是否与分镜 storyboards 数量一致
@@ -90,7 +120,6 @@ Brief 内容：
 {content}
 
 输出严格 JSON：{"score": 1-10, "pass": true/false, "feedback": "修改建议（中文）"}''',
-
   'assets': '''请审阅以下资产设计结果，给出质量评估。
 
 【最高优先级规则 — 违反任何一条将导致评分必须为 1-3 分，必须打回】
@@ -128,16 +157,16 @@ Brief 内容：
 
 /// Events emitted during stage execution for UI progress display
 enum StageEventType {
-  started,       // stage beginning
-  generating,    // agent generating content
-  generated,     // agent finished generating
-  reviewing,     // review starting
-  reviewPassed,  // review passed
-  reviewFailed,  // review failed, will retry
-  retryAttempt,  // retry attempt starting
-  exhausted,     // max retries exhausted
-  completed,     // stage fully done
-  error,         // stage error
+  started, // stage beginning
+  generating, // agent generating content
+  generated, // agent finished generating
+  reviewing, // review starting
+  reviewPassed, // review passed
+  reviewFailed, // review failed, will retry
+  retryAttempt, // retry attempt starting
+  exhausted, // max retries exhausted
+  completed, // stage fully done
+  error, // stage error
 }
 
 class StageEvent {
@@ -174,6 +203,121 @@ class DirectorAgent extends Agent {
   final LlmService llm;
 
   static const int maxRetries = 3;
+  static const preflightQuestions = [
+    DirectorGuidanceQuestion(
+      id: 'duration_unit',
+      title: '1. 明确时长单位',
+      question: '这个「75」具体表示什么？请写清单位和用途。',
+      hint: '例如：75秒，竖屏微短剧单集总时长；每集约75秒。',
+      required: true,
+    ),
+    DirectorGuidanceQuestion(
+      id: 'supporting_role',
+      title: '2. 补全关键配角',
+      question: '周瑞是谁？他和主角分别是什么关系？在剧情里承担什么作用？',
+      hint: '例如：陈振飞的同班好友，暗恋俞墨凡，负责制造误会和推动告白。',
+      required: true,
+    ),
+    DirectorGuidanceQuestion(
+      id: 'inciting_event',
+      title: '3. 交集契机',
+      question: '撞人/相遇之后，主角二人为什么会继续产生交集？',
+      hint: '例如：俞墨凡发现陈振飞拿错了她的书包，两人被迫一起找回。',
+      required: true,
+    ),
+    DirectorGuidanceQuestion(
+      id: 'emotional_beats',
+      title: '4. 情感推进',
+      question: '两人关系从陌生到靠近，中间发生哪几个关键事件？',
+      hint: '例如：误会、道歉、共同完成课堂任务、雨天送伞、发现彼此秘密。',
+      required: true,
+    ),
+    DirectorGuidanceQuestion(
+      id: 'conflict_ending',
+      title: '5. 冲突与结局',
+      question: '故事的核心冲突是什么？最后落在什么结局或情绪上？',
+      hint: '例如：周瑞的误会让两人疏远，结尾陈振飞公开道歉，俞墨凡露出笑意。',
+      required: true,
+    ),
+    DirectorGuidanceQuestion(
+      id: 'character_bios',
+      title: '6. 人物小传',
+      question: '请补充核心人物性格和行为逻辑，尤其是陈振飞、俞墨凡、周瑞。',
+      hint: '例如：陈振飞跳脱粗心但真诚；俞墨凡清冷慢热；周瑞敏感好胜。',
+      required: true,
+    ),
+  ];
+
+  Future<List<DirectorGuidanceQuestion>> analyzePreflightQuestions(
+    String creativeInput,
+  ) async {
+    final prompt = '''请只诊断用户创意描述在生成短剧 Brief 前还缺哪些关键信息，并把缺口转成逐步追问用户的问题。
+
+重要规则：
+- 不要替用户补写剧情，不要生成故事大纲，不要扩写创意。
+- 只问会影响后续剧本生成的缺失项。
+- 如果用户已经明确的信息，不要重复追问。
+- 问题数量控制在 0-6 个，按最重要到次重要排序。
+- 如果出现数字但单位不清，必须追问单位和含义。
+- 如果出现人物但身份、关系或剧情作用不清，必须追问。
+- 如果故事只有开场，没有后续交集、情感推进、冲突、结局，必须拆成具体问题追问。
+
+输出严格 JSON，不要任何多余文字：
+{
+  "questions": [
+    {
+      "id": "稳定英文或拼音下划线 id",
+      "title": "1. 简短标题",
+      "question": "面向用户的一句话问题",
+      "hint": "可填写示例，不要替用户决定",
+      "required": true
+    }
+  ]
+}
+
+用户创意描述：
+$creativeInput''';
+
+    try {
+      final response = await llm.chatCompletion(
+        messages: [
+          ChatMessage(
+            role: 'system',
+            content: '你是 DirectorAgent 的前置问诊模块，只负责发现信息缺口并提问。',
+          ),
+          ChatMessage(role: 'user', content: prompt),
+        ],
+        jsonMode: true,
+        temperature: 0.2,
+        requestTag: 'director.preflight',
+      );
+      final decoded = jsonDecode(response.content);
+      final rawQuestions =
+          decoded is Map<String, dynamic> ? decoded['questions'] : null;
+      if (rawQuestions is! List) return preflightQuestions;
+
+      final questions = <DirectorGuidanceQuestion>[];
+      for (var i = 0; i < rawQuestions.length && i < 6; i++) {
+        final item = rawQuestions[i];
+        if (item is Map<String, dynamic>) {
+          questions.add(DirectorGuidanceQuestion.fromMap(item, i));
+        } else if (item is Map) {
+          questions.add(
+            DirectorGuidanceQuestion.fromMap(
+                Map<String, dynamic>.from(item), i),
+          );
+        }
+      }
+      return questions;
+    } catch (e, st) {
+      await AppLogger.error(
+        'Director preflight analysis failed',
+        error: e,
+        stackTrace: st,
+      );
+      return preflightQuestions;
+    }
+  }
 
   DirectorAgent({required this.llm})
       : planningAgent = PlanningAgent(llm: llm),
@@ -205,7 +349,8 @@ class DirectorAgent extends Agent {
     }
   }
 
-  Future<AgentResult> runPlanning(AgentContext context, {StageEventCallback? onEvent}) async {
+  Future<AgentResult> runPlanning(AgentContext context,
+      {StageEventCallback? onEvent}) async {
     return runStageWithReview(
       context,
       planningAgent,
@@ -215,7 +360,8 @@ class DirectorAgent extends Agent {
     );
   }
 
-  Future<AgentResult> runScripting(AgentContext context, {StageEventCallback? onEvent}) async {
+  Future<AgentResult> runScripting(AgentContext context,
+      {StageEventCallback? onEvent}) async {
     return runStageWithReview(
       context,
       scriptAgent,
@@ -225,7 +371,8 @@ class DirectorAgent extends Agent {
     );
   }
 
-  Future<AgentResult> runAsseting(AgentContext context, {StageEventCallback? onEvent}) async {
+  Future<AgentResult> runAsseting(AgentContext context,
+      {StageEventCallback? onEvent}) async {
     return runStageWithReview(
       context,
       assetDesignAgent,
@@ -235,7 +382,8 @@ class DirectorAgent extends Agent {
     );
   }
 
-  Future<AgentResult> runStoryboarding(AgentContext context, {StageEventCallback? onEvent}) async {
+  Future<AgentResult> runStoryboarding(AgentContext context,
+      {StageEventCallback? onEvent}) async {
     return runStageWithReview(
       context,
       productionAgent,
@@ -245,7 +393,8 @@ class DirectorAgent extends Agent {
     );
   }
 
-  Future<AgentResult> runGenerating(AgentContext context, {StageEventCallback? onEvent}) async {
+  Future<AgentResult> runGenerating(AgentContext context,
+      {StageEventCallback? onEvent}) async {
     return runStageWithReview(
       context,
       videoAgent,
@@ -255,7 +404,8 @@ class DirectorAgent extends Agent {
     );
   }
 
-  Future<AgentResult> runCutting(AgentContext context, {StageEventCallback? onEvent}) async {
+  Future<AgentResult> runCutting(AgentContext context,
+      {StageEventCallback? onEvent}) async {
     // Final video stitching - handled separately
     return AgentResult.success({
       ...context.data,
@@ -275,7 +425,8 @@ class DirectorAgent extends Agent {
 
     for (int attempt = 0; attempt <= maxRetries; attempt++) {
       onEvent?.call(StageEvent(
-        type: attempt == 0 ? StageEventType.started : StageEventType.retryAttempt,
+        type:
+            attempt == 0 ? StageEventType.started : StageEventType.retryAttempt,
         stageLabel: stageLabel,
         attempt: attempt + 1,
       ));
@@ -460,8 +611,10 @@ class DirectorAgent extends Agent {
         if (data['genre'] != null) parts.add('类型: ${data['genre']}');
         if (data['duration'] != null) parts.add('时长: ${data['duration']}秒');
         if (data['mood'] != null) parts.add('情绪: ${data['mood']}');
-        if (data['visual_style'] != null) parts.add('风格: ${data['visual_style']}');
-        if (data['story_outline'] != null) parts.add('故事: ${data['story_outline']}');
+        if (data['visual_style'] != null)
+          parts.add('风格: ${data['visual_style']}');
+        if (data['story_outline'] != null)
+          parts.add('故事: ${data['story_outline']}');
         return parts.join('\n');
       case 'script':
         final scenes = data['scenes'] as List?;
@@ -502,8 +655,9 @@ class DirectorAgent extends Agent {
               final sbId = c['storyboard_id'] ?? '?';
               final state = c['state'] ?? '?';
               final url = c['video_url'] as String?;
-              if (state == 'done' && url != null) {
-                lines.add('镜头$sbId: 已生成 ${url.substring(0, url.length.clamp(0, 40))}...');
+              if ((state == 'completed' || state == 'done') && url != null) {
+                final preview = url.length > 40 ? url.substring(0, 40) : url;
+                lines.add('镜头$sbId: 已生成 $preview...');
               } else {
                 lines.add('镜头$sbId: 失败 - ${c['error_reason'] ?? "未知"}');
               }
@@ -518,7 +672,9 @@ class DirectorAgent extends Agent {
           final lines = <String>[];
           for (final a in assets) {
             if (a is Map<String, dynamic>) {
-              final type = a['type'] == 'character' ? '角色' : (a['type'] == 'prop' ? '道具' : '场景');
+              final type = a['type'] == 'character'
+                  ? '角色'
+                  : (a['type'] == 'prop' ? '道具' : '场景');
               final name = a['name'] ?? '?';
               final refUrl = a['reference_image_url'] as String?;
               final hasImage = refUrl != null && refUrl.isNotEmpty;
@@ -533,7 +689,8 @@ class DirectorAgent extends Agent {
     }
   }
 
-  Future<AgentResult> _review(String type, dynamic content, {String? scriptText}) async {
+  Future<AgentResult> _review(String type, dynamic content,
+      {String? scriptText}) async {
     final promptTemplate = _reviewPrompts[type];
     if (promptTemplate == null) {
       return AgentResult.success({});
@@ -543,9 +700,9 @@ class DirectorAgent extends Agent {
 
     String prompt;
     if (type == 'storyboard' && scriptText != null) {
-      prompt = promptTemplate
-          .replaceFirst('{script}', scriptText)
-          .replaceFirst('{content}', reviewContent is String ? reviewContent : jsonEncode(reviewContent));
+      prompt = promptTemplate.replaceFirst('{script}', scriptText).replaceFirst(
+          '{content}',
+          reviewContent is String ? reviewContent : jsonEncode(reviewContent));
     } else {
       prompt = promptTemplate.replaceFirst(
         '{content}',
@@ -637,8 +794,7 @@ class DirectorAgent extends Agent {
     return result;
   }
 
-  int getCurrentStageIndex(WorkflowStage state) =>
-      stageOrder.indexOf(state);
+  int getCurrentStageIndex(WorkflowStage state) => stageOrder.indexOf(state);
 
   WorkflowStage? getNextStage(WorkflowStage state) {
     final idx = getCurrentStageIndex(state);

@@ -1,10 +1,14 @@
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 
 import '../services/persistent_image_store.dart';
 
-class PersistentImage extends StatelessWidget {
+/// A StatefulWidget that loads local file images with cache-busting support.
+/// When a file is overwritten (e.g. asset regeneration), the widget detects
+/// the change via file modification time and forces a reload.
+class PersistentImage extends StatefulWidget {
   final String? remoteUrl;
   final String? localPath;
   final double? width;
@@ -27,16 +31,74 @@ class PersistentImage extends StatelessWidget {
   });
 
   @override
-  Widget build(BuildContext context) {
+  State<PersistentImage> createState() => _PersistentImageState();
+}
+
+class _PersistentImageState extends State<PersistentImage> {
+  Uint8List? _fileBytes;
+  int? _lastModTime;
+  String? _loadedPath;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadFileIfNeeded();
+  }
+
+  @override
+  void didUpdateWidget(PersistentImage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // Always check file modification time on rebuild — the file on disk
+    // may have been replaced (e.g. asset regeneration) even though
+    // localPath/remoteUrl props haven't changed.
+    _loadFileIfNeeded();
+  }
+
+  void _loadFileIfNeeded() {
     final source = PersistentImageStore.preferredSource(
-      localPath: localPath,
-      remoteUrl: remoteUrl,
+      localPath: widget.localPath,
+      remoteUrl: widget.remoteUrl,
     );
 
-    final fallback = placeholder ??
+    if (source == null || source.isEmpty || !PersistentImageStore.isLocalPath(source)) {
+      return;
+    }
+
+    final normalized = PersistentImageStore.normalizeLocalPath(source);
+    if (normalized == null || normalized.isEmpty || !File(normalized).existsSync()) {
+      return;
+    }
+
+    final file = File(normalized);
+    try {
+      final modTime = file.lastModifiedSync().millisecondsSinceEpoch;
+      if (normalized == _loadedPath && modTime == _lastModTime && _fileBytes != null) {
+        return; // Same file, same modification time — no reload needed
+      }
+      final bytes = file.readAsBytesSync();
+      if (mounted) {
+        setState(() {
+          _fileBytes = bytes;
+          _lastModTime = modTime;
+          _loadedPath = normalized;
+        });
+      }
+    } catch (_) {
+      // File access error — will show fallback
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final source = PersistentImageStore.preferredSource(
+      localPath: widget.localPath,
+      remoteUrl: widget.remoteUrl,
+    );
+
+    final fallback = widget.placeholder ??
         Container(
-          width: width,
-          height: height,
+          width: widget.width,
+          height: widget.height,
           color: Colors.grey.shade800,
           child: const Icon(Icons.broken_image, color: Colors.grey),
         );
@@ -50,28 +112,32 @@ class PersistentImage extends StatelessWidget {
       if (normalized == null || normalized.isEmpty || !File(normalized).existsSync()) {
         return fallback;
       }
-      return Image.file(
-        File(normalized),
-        key: imageKey,
-        width: width,
-        height: height,
-        fit: fit,
-        errorBuilder: errorBuilder ?? (_, __, ___) => fallback,
-      );
+      if (_fileBytes != null) {
+        return Image.memory(
+          _fileBytes!,
+          key: widget.imageKey ?? ValueKey('${normalized}_$_lastModTime'),
+          width: widget.width,
+          height: widget.height,
+          fit: widget.fit,
+          errorBuilder: widget.errorBuilder ?? (_, __, ___) => fallback,
+        );
+      }
+      // No bytes loaded yet — show fallback
+      return fallback;
     }
 
     return Image.network(
       source,
-      key: imageKey,
-      width: width,
-      height: height,
-      fit: fit,
-      errorBuilder: errorBuilder ?? (_, __, ___) => fallback,
+      key: widget.imageKey,
+      width: widget.width,
+      height: widget.height,
+      fit: widget.fit,
+      errorBuilder: widget.errorBuilder ?? (_, __, ___) => fallback,
       loadingBuilder: (context, child, progress) {
         if (progress == null) return child;
         return Container(
-          width: width,
-          height: height,
+          width: widget.width,
+          height: widget.height,
           color: Colors.grey.shade800,
           child: const Center(child: CircularProgressIndicator(strokeWidth: 2)),
         );

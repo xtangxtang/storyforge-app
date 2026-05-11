@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../db/dao/dao.dart';
 import '../models/models.dart';
 import 'create_project_screen.dart';
+import 'project_detail_screen.dart';
 
 class ProjectListScreen extends StatefulWidget {
   const ProjectListScreen({super.key});
@@ -65,7 +66,8 @@ class _ProjectListScreenState extends State<ProjectListScreen> {
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      const Icon(Icons.movie_creation, size: 64, color: Colors.grey),
+                      const Icon(Icons.movie_creation,
+                          size: 64, color: Colors.grey),
                       const SizedBox(height: 16),
                       const Text('暂无项目', style: TextStyle(color: Colors.grey)),
                       const SizedBox(height: 8),
@@ -131,23 +133,24 @@ class _ProjectListScreenState extends State<ProjectListScreen> {
   }
 
   void _navigateToCreate() async {
-    final result = await Navigator.push<bool>(
+    await Navigator.push<bool>(
       context,
       MaterialPageRoute(builder: (_) => const CreateProjectScreen()),
     );
-    if (result == true) {
-      await _loadProjects();
-    }
+    if (!mounted) return;
+    await _loadProjects();
   }
 
   void _navigateToProject(Project project) async {
-    // Check if project is in creation (not yet generating/done)
-    if (['planning', 'scripting', 'storyboarding'].contains(project.state)) {
+    // Check if project is in creation (not yet done)
+    if (['planning', 'scripting', 'asseting', 'storyboarding', 'generating']
+        .contains(project.state)) {
       final action = await showDialog<String>(
         context: context,
         builder: (ctx) => AlertDialog(
           title: const Text('项目创建中'),
-          content: Text('项目 "${project.name}" 尚未完成创作，当前处于"${_stateLabel(project.state)}"阶段。\n\n你可以继续生成，或查看详情。'),
+          content: Text(
+              '项目 "${project.name}" 尚未完成创作，当前处于"${_stateLabel(project.state)}"阶段。\n\n你可以继续生成，或查看详情。'),
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(ctx, 'detail'),
@@ -160,16 +163,19 @@ class _ProjectListScreenState extends State<ProjectListScreen> {
           ],
         ),
       );
+      if (!mounted) return;
       if (action == 'continue') {
-        final result = await Navigator.push<bool>(
+        await Navigator.push<bool>(
           context,
           MaterialPageRoute(
             builder: (_) => CreateProjectScreen(resumeProject: project),
           ),
         );
-        if (result == true) {
-          await _loadProjects();
-        }
+        if (!mounted) return;
+        await _loadProjects();
+        return;
+      }
+      if (action != 'detail') {
         return;
       }
     }
@@ -177,9 +183,10 @@ class _ProjectListScreenState extends State<ProjectListScreen> {
     await Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (_) => CreateProjectScreen(resumeProject: project),
+        builder: (_) => ProjectDetailScreen(project: project),
       ),
     );
+    if (!mounted) return;
     await _loadProjects();
   }
 }

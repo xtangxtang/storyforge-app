@@ -161,7 +161,7 @@ class Scene {
 
   factory Scene.fromMap(Map<String, dynamic> map) {
     return Scene(
-      sceneNum: map['scene_num'] as int? ?? 0,
+      sceneNum: _readInt(map['scene_num']),
       location: map['location'] as String? ?? '',
       description: map['description'] as String? ?? '',
       action: map['action'] as String? ?? '',
@@ -169,7 +169,7 @@ class Scene {
               ?.map((e) => e.toString())
               .toList() ??
           [],
-      duration: map['duration'] as int? ?? 0,
+      duration: _readInt(map['duration']),
     );
   }
 
@@ -183,6 +183,13 @@ class Scene {
       'duration': duration,
     };
   }
+}
+
+int _readInt(dynamic value, {int fallback = 0}) {
+  if (value is int) return value;
+  if (value is num) return value.toInt();
+  if (value is String) return int.tryParse(value) ?? fallback;
+  return fallback;
 }
 
 class Asset {
@@ -333,9 +340,8 @@ class Storyboard {
       'created_at': createdAt,
       'reference_image_url': referenceImageUrl,
       'reference_image_local_path': referenceImageLocalPath,
-      'reference_image_urls': referenceImageUrls != null
-          ? jsonEncode(referenceImageUrls)
-          : null,
+      'reference_image_urls':
+          referenceImageUrls != null ? jsonEncode(referenceImageUrls) : null,
     };
   }
 }

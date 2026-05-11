@@ -72,7 +72,8 @@ JSON 结构必须完全匹配：
    - 示例格式："一辆老式自行车，金属框架，黑色车架，橡胶轮胎"
 ''';
 
-const _storyboardSystemPrompt = '''你是专业分镜师。根据提供的剧本文本制作分镜脚本，必须输出严格 JSON 格式，不要任何多余文字。
+const _storyboardSystemPrompt =
+    '''你是专业分镜师。根据提供的剧本文本制作分镜脚本，必须输出严格 JSON 格式，不要任何多余文字。
 
 【最高优先级规则 — 违反任何一条将导致输出被拒绝】
 
@@ -99,7 +100,7 @@ JSON 结构必须完全匹配：
       "shot_type": "close-up",
       "camera_move": "static",
       "description": "分镜画面描述（中文，忠实反映剧本该场景的动作和画面）",
-      "first_frame_prompt": "首帧图生成提示词（中文，详细描述画面内容、光影、色调、构图、角色外貌特征）",
+      "first_frame_prompt": "首帧图生成提示词（中文，必须按以下五个维度组织：[主体描述]角色/人物的外貌、服装、姿态、表情；[细节描述]画面中的关键道具、纹理、材质等细节；[背景描述]场景环境、空间层次、远景中景近景；[光影描述]光源方向、明暗对比、色调氛围；[情绪描述]画面传递的情感张力、情绪基调）",
       "video_prompt": "视频生成提示词（中文，描述运镜方式、角色动作、环境变化）",
       "duration": 8
     }
@@ -109,7 +110,7 @@ JSON 结构必须完全匹配：
 要求：
 - shot_type 用: close-up/medium/wide/extreme-close-up
 - camera_move 用: static/pan/zoom/tilt/dolly
-- first_frame_prompt 必须包含角色的外貌一致性描述（服装、发型、年龄感等）和场景的视觉特征
+- first_frame_prompt 必须按五个维度组织：[主体描述]角色外貌、服装、姿态、表情；[细节描述]道具、纹理、材质等细节；[背景描述]场景环境、空间层次；[光影描述]光源方向、明暗对比、色调氛围；[情绪描述]画面传递的情感张力和情绪基调。每个维度都要有实质性内容，不得省略任何维度。
 - video_prompt 侧重动态：运镜、角色动作、环境变化''';
 
 class PlanningAgent extends Agent {
@@ -127,10 +128,19 @@ class PlanningAgent extends Agent {
     }
     final feedback = context.data['feedback'] as String?;
     final feedbackText = feedback != null ? '\n修改建议（请根据以下建议调整）：$feedback' : '';
+    final directorGuidance = context.data['director_guidance'] as String?;
+    final guidanceText = directorGuidance != null &&
+            directorGuidance.trim().isNotEmpty
+        ? '\n\nDirectorAgent 已向用户逐步确认的创作约束如下，必须优先遵守，不要自行覆盖：\n$directorGuidance'
+        : '';
+    final memoryText = _creativeMemoryInstruction(context);
 
     final messages = [
       ChatMessage(role: 'system', content: _briefSystemPrompt),
-      ChatMessage(role: 'user', content: '请为以下创意生成 Brief：$prompt$feedbackText'),
+      ChatMessage(
+          role: 'user',
+          content:
+              '请为以下创意生成 Brief：$prompt$guidanceText$memoryText$feedbackText'),
     ];
 
     if (context.data['template'] != null) {
@@ -188,7 +198,8 @@ class PlanningAgent extends Agent {
 
       final storyOutline = brief['story_outline']?.toString();
       if (storyOutline == null || storyOutline.isEmpty) {
-        return AgentResult.error('LLM returned invalid brief format (missing story_outline)');
+        return AgentResult.error(
+            'LLM returned invalid brief format (missing story_outline)');
       }
 
       return AgentResult.success({
@@ -225,18 +236,19 @@ class ScriptAgent extends Agent {
     final prompt = context.data['prompt'] as String? ?? '';
     final brief = context.data['brief'] as Map<String, dynamic>?;
     final feedback = context.data['feedback'] as String?;
+    final memoryText = _creativeMemoryInstruction(context);
 
     final briefText = brief != null
         ? 'Brief: genre=${brief['genre']}, mood=${brief['mood']}, story=${brief['story_outline']}, style=${brief['visual_style']}'
         : '';
-    final feedbackText =
-        feedback != null ? '\n修改建议（请根据以下建议调整）：$feedback' : '';
+    final feedbackText = feedback != null ? '\n修改建议（请根据以下建议调整）：$feedback' : '';
 
     final messages = [
       ChatMessage(role: 'system', content: _scriptSystemPrompt),
       ChatMessage(
         role: 'user',
-        content: '根据以下创意编写剧本：$prompt${briefText.isNotEmpty ? '\n$briefText' : ''}$feedbackText',
+        content:
+            '根据以下创意编写剧本：$prompt${briefText.isNotEmpty ? '\n$briefText' : ''}$memoryText$feedbackText',
       ),
     ];
 
@@ -368,25 +380,26 @@ class ProductionAgent extends Agent {
     final script = context.data['script'] as Map<String, dynamic>?;
     final brief = context.data['brief'] as Map<String, dynamic>?;
     final feedback = context.data['feedback'] as String?;
+    final memoryText = _creativeMemoryInstruction(context);
 
     final scriptText = script != null ? _formatScriptForStoryboard(script) : '';
     final briefText = brief != null
         ? '\n策划参考：mood=${brief['mood']}, visual_style=${brief['visual_style']}'
         : '';
-    final feedbackText =
-        feedback != null ? '\n修改建议（请根据以下建议调整）：$feedback' : '';
+    final feedbackText = feedback != null ? '\n修改建议（请根据以下建议调整）：$feedback' : '';
 
     final messages = [
       ChatMessage(role: 'system', content: _storyboardSystemPrompt),
       ChatMessage(
         role: 'user',
         content:
-            '请根据以下剧本制作分镜。注意：必须严格按照剧本的场景、角色、剧情来制作分镜，不得自行创作新内容。\n\n$scriptText$briefText$feedbackText',
+            '请根据以下剧本制作分镜。注意：必须严格按照剧本的场景、角色、剧情来制作分镜，不得自行创作新内容。\n\n$scriptText$briefText$memoryText$feedbackText',
       ),
     ];
 
     try {
-      final temperature = (context.data['storyboardTemperature'] as num?)?.toDouble() ?? 0.3;
+      final temperature =
+          (context.data['storyboardTemperature'] as num?)?.toDouble() ?? 0.3;
       final response = await llm.chatCompletion(
         messages: messages,
         jsonMode: true,
@@ -401,7 +414,9 @@ class ProductionAgent extends Agent {
       } else if (decoded is Map) {
         result = Map<String, dynamic>.from(decoded);
       }
-      if (result == null || result['storyboards'] == null || result['storyboards'] is! List) {
+      if (result == null ||
+          result['storyboards'] == null ||
+          result['storyboards'] is! List) {
         return AgentResult.error('Invalid storyboard format from LLM');
       }
 
@@ -409,7 +424,8 @@ class ProductionAgent extends Agent {
       for (final sbItem in result['storyboards'] as List) {
         final m = _asStringDynamicMap(sbItem);
         if (m == null) {
-          await AppLogger.warn('Storyboard item has invalid type', data: {'projectId': context.projectId});
+          await AppLogger.warn('Storyboard item has invalid type',
+              data: {'projectId': context.projectId});
           continue;
         }
         storyboards.add(Storyboard(
@@ -422,7 +438,7 @@ class ProductionAgent extends Agent {
           description: m['description'] as String? ?? '',
           firstFramePrompt: m['first_frame_prompt'] as String? ?? '',
           videoPrompt: m['video_prompt'] as String? ?? '',
-          duration: m['duration'] as int? ?? 5,
+          duration: _readInt(m['duration'], fallback: 5),
           createdAt: DateTime.now().millisecondsSinceEpoch,
         ));
       }
@@ -443,6 +459,18 @@ class ProductionAgent extends Agent {
 }
 
 Map<String, dynamic>? _asStringDynamicMap(dynamic value) {
+  if (value is Asset) {
+    return value.toMap();
+  }
+
+  if (value is Storyboard) {
+    return value.toMap();
+  }
+
+  if (value is Scene) {
+    return value.toMap();
+  }
+
   if (value is Map<String, dynamic>) {
     return value;
   }
@@ -456,6 +484,25 @@ Map<String, dynamic>? _asStringDynamicMap(dynamic value) {
   }
 
   return null;
+}
+
+int _readInt(dynamic value, {int fallback = 0}) {
+  if (value is int) return value;
+  if (value is num) return value.toInt();
+  if (value is String) return int.tryParse(value) ?? fallback;
+  return fallback;
+}
+
+String _creativeMemoryInstruction(AgentContext context) {
+  final memory = context.data['creative_memory'] as String?;
+  if (memory == null || memory.trim().isEmpty) return '';
+  return '''
+
+【项目 Wiki 记忆】
+以下内容是本项目持续维护的创作事实源。必须优先遵守用户确认的约束、人物关系、视觉锚点和已生成阶段事实；如与当前任务输入冲突，以用户确认约束和最新 wiki 为准，不要自行改写。
+
+${memory.trim()}
+''';
 }
 
 /// Format script as a readable scene-by-scene list for the storyboard LLM.
@@ -547,7 +594,6 @@ String _formatScriptForStoryboard(Map<String, dynamic> script) {
   return buffer.toString();
 }
 
-
 /// Asset design agent - generates reference images for each character and
 /// location asset. These canonical images serve as visual anchors throughout
 /// the pipeline, ensuring character and scene consistency across all storyboards.
@@ -580,6 +626,7 @@ class AssetDesignAgent extends Agent {
 
     final feedback = context.data['feedback'] as String?;
     final feedbackText = feedback != null ? '。修改建议：$feedback' : '';
+    final memoryText = _creativeMemoryInstruction(context);
 
     int successCount = 0;
     int failCount = 0;
@@ -603,13 +650,18 @@ class AssetDesignAgent extends Agent {
         prompt,
         asset.type,
         scriptData,
+        memoryText,
         feedbackText,
       );
 
       try {
         await AppLogger.info(
           'Generating reference image for asset',
-          data: {'assetId': asset.id, 'assetName': asset.name, 'assetType': asset.type},
+          data: {
+            'assetId': asset.id,
+            'assetName': asset.name,
+            'assetType': asset.type
+          },
         );
 
         final imageUrl = await _dashscope.generateImage(enhancedPrompt);
@@ -667,6 +719,7 @@ class AssetDesignAgent extends Agent {
     String basePrompt,
     String assetType,
     Map<String, dynamic>? scriptData,
+    String memoryText,
     String feedbackText,
   ) {
     final buffer = StringBuffer();
@@ -706,6 +759,10 @@ class AssetDesignAgent extends Agent {
 
     if (feedbackText.isNotEmpty) {
       buffer.write(feedbackText);
+    }
+    if (memoryText.isNotEmpty) {
+      buffer.writeln();
+      buffer.write(memoryText);
     }
 
     return buffer.toString();
@@ -755,6 +812,7 @@ class VideoAgent extends Agent {
 
     final feedback = context.data['feedback'] as String?;
     final feedbackText = feedback != null ? '。修改建议：$feedback' : '';
+    final memoryText = _creativeMemoryInstruction(context);
 
     // ============================================================
     // Step 2: Generate videos with consistency anchors + continuity
@@ -785,19 +843,22 @@ class VideoAgent extends Agent {
 
       // Build enhanced image prompt (always used for reference image generation)
       final enhancedImagePrompt = _enhanceImagePrompt(
-        consistencyAnchors,
-        sceneNum,
-        firstFramePrompt,
-        shotDescription,
-      );
+            consistencyAnchors,
+            sceneNum,
+            firstFramePrompt,
+            shotDescription,
+          ) +
+          memoryText;
 
       // Build enhanced video prompt (injects visual context for video generation)
       final enhancedVideoPrompt = _enhanceVideoPrompt(
-        consistencyAnchors,
-        sceneNum,
-        videoPrompt,
-        shotDescription,
-      ) + feedbackText;
+            consistencyAnchors,
+            sceneNum,
+            videoPrompt,
+            shotDescription,
+          ) +
+          memoryText +
+          feedbackText;
 
       // ============================================================
       // Generate reference image with consistency anchors
@@ -806,13 +867,19 @@ class VideoAgent extends Agent {
       // ============================================================
       // Generate reference image with consistency anchors and canonical images
       String? refImageUrl = sbMap['reference_image_url'] as String?;
-      String? refImageLocalPath = sbMap['reference_image_local_path'] as String?;
+      String? refImageLocalPath =
+          sbMap['reference_image_local_path'] as String?;
       if ((refImageUrl == null || refImageUrl.isEmpty) &&
           enhancedImagePrompt.isNotEmpty) {
         final refUrls = _getReferenceImageUrls(consistencyAnchors, sceneNum);
         await AppLogger.info(
           'Generating reference image with canonical reference images',
-          data: {'storyboard_id': storyboardId, 'scene': sceneNum, 'shot': '${i + 1}/${sorted.length}', 'refImageCount': refUrls.length},
+          data: {
+            'storyboard_id': storyboardId,
+            'scene': sceneNum,
+            'shot': '${i + 1}/${sorted.length}',
+            'refImageCount': refUrls.length
+          },
         );
         refImageUrl = await _dashscope.generateImage(
           enhancedImagePrompt,
@@ -820,7 +887,9 @@ class VideoAgent extends Agent {
         );
       }
 
-      if (refImageLocalPath == null && refImageUrl != null && refImageUrl.isNotEmpty) {
+      if (refImageLocalPath == null &&
+          refImageUrl != null &&
+          refImageUrl.isNotEmpty) {
         refImageLocalPath = await PersistentImageStore().persistRemoteImage(
           refImageUrl,
           category: 'storyboards',
@@ -834,9 +903,8 @@ class VideoAgent extends Agent {
       // - Same scene subsequent shot: use previous shot's reference
       //   (adjacent-frame passing for temporal continuity)
       // ============================================================
-      final videoFirstFrame = isNewScene
-          ? refImageUrl
-          : (continuityRefImage ?? refImageUrl);
+      final videoFirstFrame =
+          isNewScene ? refImageUrl : (continuityRefImage ?? refImageUrl);
 
       // ============================================================
       // Generate video
@@ -850,7 +918,8 @@ class VideoAgent extends Agent {
           });
           failCount++;
         } else {
-          final videoRefUrls = _getReferenceImageUrls(consistencyAnchors, sceneNum);
+          final videoRefUrls =
+              _getReferenceImageUrls(consistencyAnchors, sceneNum);
           final videoUrl = await _dashscope.generateVideo(
             prompt: enhancedVideoPrompt,
             firstFrameUrl: videoFirstFrame,
@@ -948,13 +1017,18 @@ class VideoAgent extends Agent {
                 characterImages.add('$name: $refImage');
               }
             }
-            if (type == 'location') {
+            if (type == 'location' && desc.isNotEmpty) {
               final sceneNum = m['scene_num'];
               if (sceneNum is int) {
                 sceneLocations[sceneNum] = desc;
                 if (refImage != null && refImage.isNotEmpty) {
                   sceneImages[sceneNum] = refImage;
                 }
+              }
+              if (refImage != null && refImage.isNotEmpty) {
+                // Location assets are usually not tied to a scene number in the
+                // DB, so include them as global visual references.
+                propImages.add('$name: $refImage');
               }
             }
             if (type == 'prop' && desc.isNotEmpty) {
@@ -981,7 +1055,8 @@ class VideoAgent extends Agent {
               final sceneNum = (sm['scene_num'] as num?)?.toInt() ?? (i + 1);
               final loc = sm['location']?.toString() ?? '';
               final desc = sm['description']?.toString() ?? '';
-              if (!sceneLocations.containsKey(sceneNum) && (loc.isNotEmpty || desc.isNotEmpty)) {
+              if (!sceneLocations.containsKey(sceneNum) &&
+                  (loc.isNotEmpty || desc.isNotEmpty)) {
                 sceneLocations[sceneNum] = '$loc. $desc'.trim();
               }
             }
@@ -1015,7 +1090,8 @@ class VideoAgent extends Agent {
         final idx = line.indexOf(':');
         if (idx > 0) {
           final url = line.substring(idx + 1).trim();
-          if (url.isNotEmpty && (url.startsWith('http://') || url.startsWith('https://'))) {
+          if (url.isNotEmpty &&
+              (url.startsWith('http://') || url.startsWith('https://'))) {
             urls.add(url);
           }
         }
@@ -1038,7 +1114,8 @@ class VideoAgent extends Agent {
         final idx = line.indexOf(':');
         if (idx > 0) {
           final url = line.substring(idx + 1).trim();
-          if (url.isNotEmpty && (url.startsWith('http://') || url.startsWith('https://'))) {
+          if (url.isNotEmpty &&
+              (url.startsWith('http://') || url.startsWith('https://'))) {
             urls.add(url);
           }
         }

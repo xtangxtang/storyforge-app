@@ -1,5 +1,8 @@
 import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+import 'package:path/path.dart' as p;
 import 'package:uuid/uuid.dart';
 import '../config/app_config.dart';
 import '../db/dao/dao.dart';
@@ -10,7 +13,9 @@ import '../services/llm_service.dart';
 import '../services/dashscope_service.dart' as dashscope;
 import '../services/app_logger.dart';
 import '../services/persistent_image_store.dart';
+import '../services/project_wiki_store.dart';
 import '../widgets/persistent_image.dart';
+import 'project_detail_screen.dart';
 import 'seedance_web_screen.dart';
 
 class CreateProjectScreen extends StatefulWidget {
@@ -23,7 +28,9 @@ class CreateProjectScreen extends StatefulWidget {
 
 class _CreateProjectScreenState extends State<CreateProjectScreen> {
   final _promptController = TextEditingController();
+  final _guidanceController = TextEditingController();
   final _projectDao = ProjectDao();
+  final _wikiStore = ProjectWikiStore();
   late LlmService _llm;
 
   String? _projectId;
@@ -36,15 +43,41 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
 
   // Stage definitions
   static const _stageDefs = [
-    StageDef(label: '策划', icon: Icons.lightbulb, color: Colors.orange, reviewType: 'brief'),
-    StageDef(label: '编剧', icon: Icons.edit_note, color: Colors.blue, reviewType: 'script'),
-    StageDef(label: '角色设计', icon: Icons.palette, color: Colors.red, reviewType: 'assets'),
-    StageDef(label: '分镜', icon: Icons.view_carousel, color: Colors.purple, reviewType: 'storyboard'),
-    StageDef(label: '视频', icon: Icons.videocam, color: Colors.teal, reviewType: 'video'),
+    StageDef(
+        label: '策划',
+        icon: Icons.lightbulb,
+        color: Colors.orange,
+        reviewType: 'brief'),
+    StageDef(
+        label: '编剧',
+        icon: Icons.edit_note,
+        color: Colors.blue,
+        reviewType: 'script'),
+    StageDef(
+        label: '角色设计',
+        icon: Icons.palette,
+        color: Colors.red,
+        reviewType: 'assets'),
+    StageDef(
+        label: '分镜',
+        icon: Icons.view_carousel,
+        color: Colors.purple,
+        reviewType: 'storyboard'),
+    StageDef(
+        label: '视频',
+        icon: Icons.videocam,
+        color: Colors.teal,
+        reviewType: 'video'),
   ];
 
   // User feedback for retry
   String _userFeedback = '';
+
+  int _guidanceStep = 0;
+  bool _analyzingGuidance = false;
+  String? _guidancePromptSnapshot;
+  List<DirectorGuidanceQuestion> _guidanceQuestions = [];
+  final Map<String, String> _directorGuidanceAnswers = {};
 
   // Storyboard generation settings
   double _storyboardTemperature = 0.3;
@@ -96,7 +129,8 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
     // Determine which stages are completed
     int startStage = 0;
     if (brief != null) {
-      final stage = StageProgress(label: '策划', icon: Icons.lightbulb, color: Colors.orange);
+      final stage = StageProgress(
+          label: '策划', icon: Icons.lightbulb, color: Colors.orange);
       stage.status = 'done';
       stage.finalData = {
         'genre': brief.genre,
@@ -111,7 +145,8 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
       startStage = 1;
     }
     if (script != null) {
-      final stage = StageProgress(label: '编剧', icon: Icons.edit_note, color: Colors.blue);
+      final stage =
+          StageProgress(label: '编剧', icon: Icons.edit_note, color: Colors.blue);
       stage.status = 'done';
       stage.finalData = {
         'scenes': sceneObjects,
@@ -124,18 +159,21 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
     // Always show the "角色设计" stage if we've passed scripting
     // Even if assets haven't been generated yet, we should show the stage
     {
-      final stage = StageProgress(label: '角色设计', icon: Icons.palette, color: Colors.red);
+      final stage =
+          StageProgress(label: '角色设计', icon: Icons.palette, color: Colors.red);
 
       if (assets.isNotEmpty) {
         final hasAllImages = assets.every(
-          (a) => PersistentImageStore.preferredSource(
+          (a) =>
+              PersistentImageStore.preferredSource(
                 localPath: a.referenceImageLocalPath,
                 remoteUrl: a.referenceImageUrl,
               ) !=
               null,
         );
         final hasAnyImages = assets.any(
-          (a) => PersistentImageStore.preferredSource(
+          (a) =>
+              PersistentImageStore.preferredSource(
                 localPath: a.referenceImageLocalPath,
                 remoteUrl: a.referenceImageUrl,
               ) !=
@@ -152,13 +190,16 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
         } else if (hasAnyImages) {
           // Partially done — show with warning status
           stage.status = 'warn';
-          final missingCount = assets.where(
-            (a) => PersistentImageStore.preferredSource(
-                  localPath: a.referenceImageLocalPath,
-                  remoteUrl: a.referenceImageUrl,
-                ) ==
-                null,
-          ).length;
+          final missingCount = assets
+              .where(
+                (a) =>
+                    PersistentImageStore.preferredSource(
+                      localPath: a.referenceImageLocalPath,
+                      remoteUrl: a.referenceImageUrl,
+                    ) ==
+                    null,
+              )
+              .length;
           stage.feedback = '还有 $missingCount 个资产参考图未生成';
           // Show this stage but don't advance
           _stages.add(stage);
@@ -184,12 +225,13 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
         'storyboardCount': storyboards.length,
         'ids': storyboards.map((s) => s.id).toList(),
       });
-      final stage = StageProgress(label: '分镜', icon: Icons.view_carousel, color: Colors.purple);
+      final stage = StageProgress(
+          label: '分镜', icon: Icons.view_carousel, color: Colors.purple);
       stage.status = 'done';
       stage.finalData = {'storyboards': storyboards};
       stage.contentPreview = _formatPreview(stage.finalData, 'storyboard');
       _completedStages[3] = stage;
-      startStage = 4;  // 分镜已完成，下一步是视频阶段
+      startStage = 4; // 分镜已完成，下一步是视频阶段
     } else {
       await AppLogger.warn('Resume: NO storyboards found in DB', data: {
         'projectId': pid,
@@ -197,16 +239,26 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
       });
     }
     if (videoClips.isNotEmpty) {
-      final stage = StageProgress(label: '视频', icon: Icons.videocam, color: Colors.teal);
+      final stage =
+          StageProgress(label: '视频', icon: Icons.videocam, color: Colors.teal);
       stage.status = 'done';
       stage.finalData = {'clips': videoClips.map((c) => c.toMap()).toList()};
       stage.contentPreview = _formatPreview(stage.finalData, 'video');
       _completedStages[4] = stage;
-      startStage = 4;
+      final completedClipStoryboardIds = videoClips
+          .where((c) => c.state == 'completed' || c.state == 'done')
+          .map((c) => c.storyboardId)
+          .toSet();
+      final allStoryboardsHaveVideo = storyboards.isNotEmpty &&
+          storyboards.every((s) => completedClipStoryboardIds.contains(s.id));
+      startStage = (project.state == 'done' || allStoryboardsHaveVideo)
+          ? _stageDefs.length
+          : 4;
     }
 
     _currentStageIndex = startStage;
-    final sortedStages = _completedStages.entries.toList()..sort((a, b) => a.key.compareTo(b.key));
+    final sortedStages = _completedStages.entries.toList()
+      ..sort((a, b) => a.key.compareTo(b.key));
     _stages.addAll(sortedStages.map((e) => e.value));
 
     // Setup agent context with existing data
@@ -216,12 +268,16 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
       projectId: pid,
       data: {
         'prompt': prompt,
-        'currentStage': startStage >= _stageDefs.length ? 'done' : _stageIndexToWorkflowStage(startStage),
+        'currentStage': startStage >= _stageDefs.length
+            ? 'done'
+            : _stageIndexToWorkflowStage(startStage),
       },
     );
     if (brief != null) {
       _agentCtx!.data['brief'] = {
         'genre': brief.genre,
+        'duration': brief.duration,
+        'aspect_ratio': brief.aspectRatio,
         'mood': brief.mood,
         'story_outline': brief.storyOutline,
         'visual_style': brief.visualStyle,
@@ -235,6 +291,39 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
       };
     }
     _promptController.text = prompt;
+
+    await _wikiStore.initializeProject(projectId: pid, creativeInput: prompt);
+    if (brief != null) {
+      await _wikiStore.updateBrief(projectId: pid, brief: brief.toMap());
+    }
+    if (script != null) {
+      await _wikiStore.updateScript(
+        projectId: pid,
+        scriptData: {
+          'scenes': sceneObjects,
+          'assets': assets.map((a) => a.toMap()).toList(),
+        },
+      );
+    }
+    if (assets.isNotEmpty) {
+      await _wikiStore.updateAssets(projectId: pid, assets: assets);
+    }
+    if (storyboards.isNotEmpty) {
+      await _wikiStore.updateStoryboards(
+          projectId: pid, storyboards: storyboards);
+    }
+    if (videoClips.isNotEmpty) {
+      await _wikiStore.updateVideoClips(
+        projectId: pid,
+        videoData: {'clips': videoClips.map((c) => c.toMap()).toList()},
+      );
+    }
+    _agentCtx!.data['creative_memory'] = await _wikiStore.compileContextPack(
+      pid,
+      stage: startStage >= _stageDefs.length
+          ? 'done'
+          : _stageIndexToWorkflowStage(startStage),
+    );
 
     if (startStage >= _stageDefs.length) {
       // Project fully completed
@@ -252,7 +341,9 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
 
     for (final asset in assets) {
       String? localPath = asset.referenceImageLocalPath;
-      if (localPath == null && asset.referenceImageUrl != null && asset.referenceImageUrl!.isNotEmpty) {
+      if (localPath == null &&
+          asset.referenceImageUrl != null &&
+          asset.referenceImageUrl!.isNotEmpty) {
         localPath = await imageStore.persistRemoteImage(
           asset.referenceImageUrl,
           category: 'assets',
@@ -346,7 +437,29 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
 
     if (!AppConfig.isConfigured) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('请先在设置页面配置 API Key')),
+        SnackBar(
+          content: Text(
+            AppConfig.useSeedanceForVideo
+                ? '请先在设置页面配置 LLM 和图像 API Key'
+                : '请先在设置页面配置 LLM、图像和视频 API Key',
+          ),
+        ),
+      );
+      return;
+    }
+
+    if (!_guidanceReadyForCurrentPrompt()) {
+      await _analyzeGuidanceQuestions();
+      if (!mounted) return;
+      if (_guidanceQuestions.isNotEmpty) return;
+    }
+
+    final missingIndex = _firstMissingGuidanceQuestionIndex();
+    if (missingIndex != null) {
+      _goToGuidanceStep(missingIndex);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+            content: Text('请先补全：${_guidanceQuestions[missingIndex].title}')),
       );
       return;
     }
@@ -356,18 +469,34 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
 
     final project = Project(
       id: projectId,
-      name: _promptController.text.trim().substring(0, 20),
+      name: _truncateText(_promptController.text.trim(), 20),
       state: 'planning',
       createdAt: DateTime.now().millisecondsSinceEpoch,
       updatedAt: DateTime.now().millisecondsSinceEpoch,
     );
     await _projectDao.insert(project);
+    await _wikiStore.initializeProject(
+      projectId: projectId,
+      creativeInput: _promptController.text.trim(),
+    );
+    await _wikiStore.updateOpenQuestions(
+      projectId: projectId,
+      questions: _guidanceQuestionMaps(),
+    );
+    final directorGuidance = _buildDirectorGuidanceText();
+    await _wikiStore.updateUserAnswers(
+      projectId: projectId,
+      guidanceText: directorGuidance,
+    );
 
     _director = DirectorAgent(llm: _llm);
     _agentCtx = AgentContext(
       projectId: projectId,
       data: {
         'prompt': _promptController.text.trim(),
+        'director_guidance': directorGuidance,
+        'creative_memory':
+            await _wikiStore.compileContextPack(projectId, stage: 'planning'),
         'currentStage': 'planning',
       },
     );
@@ -381,6 +510,95 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
     await _runCurrentStage();
   }
 
+  bool _guidanceReadyForCurrentPrompt() =>
+      _guidancePromptSnapshot == _promptController.text.trim();
+
+  Future<void> _analyzeGuidanceQuestions() async {
+    final prompt = _promptController.text.trim();
+    setState(() {
+      _analyzingGuidance = true;
+      _guidanceQuestions = [];
+      _directorGuidanceAnswers.clear();
+      _guidanceStep = 0;
+      _guidanceController.clear();
+    });
+
+    final director = _director ?? DirectorAgent(llm: _llm);
+    _director = director;
+    final questions = await director.analyzePreflightQuestions(prompt);
+
+    if (!mounted) return;
+    setState(() {
+      _analyzingGuidance = false;
+      _guidancePromptSnapshot = prompt;
+      _guidanceQuestions = questions;
+      if (_guidanceQuestions.isNotEmpty) {
+        _guidanceController.text =
+            _directorGuidanceAnswers[_guidanceQuestions.first.id] ?? '';
+      }
+    });
+  }
+
+  int? _firstMissingGuidanceQuestionIndex() {
+    for (var i = 0; i < _guidanceQuestions.length; i++) {
+      final question = _guidanceQuestions[i];
+      final answer = _directorGuidanceAnswers[question.id]?.trim() ?? '';
+      if (question.required && answer.isEmpty) return i;
+    }
+    return null;
+  }
+
+  void _saveCurrentGuidanceAnswer() {
+    if (_guidanceQuestions.isEmpty) return;
+    final question = _guidanceQuestions[_guidanceStep];
+    final answer = _guidanceController.text.trim();
+    if (answer.isEmpty) {
+      _directorGuidanceAnswers.remove(question.id);
+    } else {
+      _directorGuidanceAnswers[question.id] = answer;
+    }
+  }
+
+  void _goToGuidanceStep(int step) {
+    if (_guidanceQuestions.isEmpty) return;
+    _saveCurrentGuidanceAnswer();
+    setState(() {
+      _guidanceStep = step.clamp(0, _guidanceQuestions.length - 1);
+      final question = _guidanceQuestions[_guidanceStep];
+      _guidanceController.text = _directorGuidanceAnswers[question.id] ?? '';
+    });
+  }
+
+  String _buildDirectorGuidanceText() {
+    _saveCurrentGuidanceAnswer();
+    return _guidanceQuestions
+        .map((question) {
+          final answer = _directorGuidanceAnswers[question.id]?.trim();
+          if (answer == null || answer.isEmpty) return null;
+          return '${question.title}：$answer';
+        })
+        .whereType<String>()
+        .join('\n');
+  }
+
+  List<Map<String, Object?>> _guidanceQuestionMaps() {
+    return _guidanceQuestions
+        .map((question) => {
+              'id': question.id,
+              'title': question.title,
+              'question': question.question,
+              'hint': question.hint,
+              'required': question.required,
+            })
+        .toList();
+  }
+
+  Future<void> _refreshCreativeMemory(String stage) async {
+    if (_projectId == null || _agentCtx == null) return;
+    _agentCtx!.data['creative_memory'] =
+        await _wikiStore.compileContextPack(_projectId!, stage: stage);
+  }
+
   /// Get existing stage or create new one (prevents duplicate cards)
   StageProgress _getOrCreateCurrentStage() {
     // Check if we already have a card for this stage
@@ -389,7 +607,8 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
       // If retrying, reset state but keep the card
       if (existing.status == 'done' || existing.status == 'warn') {
         existing.status = 'running';
-        existing.messages.add(_ProgressMessage(type: 'warn', text: '--- 根据反馈重新生成 ---'));
+        existing.messages
+            .add(_ProgressMessage(type: 'warn', text: '--- 根据反馈重新生成 ---'));
         existing.contentPreview = '';
         existing.finalData = null;
       } else if (existing.status == 'pending') {
@@ -399,7 +618,8 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
     }
     // New stage
     final def = _stageDefs[_currentStageIndex];
-    final stage = StageProgress(label: def.label, icon: def.icon, color: def.color);
+    final stage =
+        StageProgress(label: def.label, icon: def.icon, color: def.color);
     _stages.add(stage);
     return stage;
   }
@@ -412,12 +632,14 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
 
     final stage = _getOrCreateCurrentStage();
 
-    await AppLogger.info('Stage started', data: {'projectId': _projectId, 'stage': stage.label});
+    await AppLogger.info('Stage started',
+        data: {'projectId': _projectId, 'stage': stage.label});
 
     try {
       AgentResult result;
       switch (_currentStageIndex) {
         case 0: // 策划
+          await _refreshCreativeMemory('planning');
           // Inject user feedback for retry
           if (_userFeedback.isNotEmpty) {
             _agentCtx!.data['feedback'] = _userFeedback;
@@ -430,7 +652,8 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
           if (result.success && result.data != null) {
             final briefData = result.data as Map<String, dynamic>;
             // Check if this is a retry result (has reviewScore) or first result
-            final hasBriefData = briefData.containsKey('genre') && briefData.containsKey('story_outline');
+            final hasBriefData = briefData.containsKey('genre') &&
+                briefData.containsKey('story_outline');
             if (hasBriefData) {
               final brief = Brief(
                 projectId: _projectId!,
@@ -445,10 +668,16 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
               await BriefDao().insert(brief);
               _agentCtx!.data['brief'] = {
                 'genre': brief.genre,
+                'duration': brief.duration,
+                'aspect_ratio': brief.aspectRatio,
                 'mood': brief.mood,
                 'story_outline': brief.storyOutline,
                 'visual_style': brief.visualStyle,
               };
+              await _wikiStore.updateBrief(
+                projectId: _projectId!,
+                brief: briefData,
+              );
             }
             stage.finalData = briefData;
           }
@@ -457,6 +686,7 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
         case 1: // 编剧
           _agentCtx!.data['currentStage'] = 'scripting';
           _agentCtx!.data['prompt'] = _promptController.text.trim();
+          await _refreshCreativeMemory('scripting');
           if (_userFeedback.isNotEmpty) {
             _agentCtx!.data['feedback'] = _userFeedback;
             _userFeedback = '';
@@ -490,11 +720,16 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
             stage.finalData = scriptData;
             // Inject script into context so ProductionAgent can use it
             _agentCtx!.data['script'] = scriptData;
+            await _wikiStore.updateScript(
+              projectId: _projectId!,
+              scriptData: scriptData,
+            );
           }
           break;
 
         case 2: // 角色设计
           _agentCtx!.data['currentStage'] = 'asseting';
+          await _refreshCreativeMemory('asseting');
           if (_userFeedback.isNotEmpty) {
             _agentCtx!.data['feedback'] = _userFeedback;
             _userFeedback = '';
@@ -535,21 +770,30 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
             }
             // Update assets in context for downstream stages
             if (rawAssets is List) {
-              final scriptData = _agentCtx!.data['script'] as Map<String, dynamic>?;
+              final scriptData =
+                  _agentCtx!.data['script'] as Map<String, dynamic>?;
               if (scriptData != null) {
                 scriptData['assets'] = rawAssets;
               }
             }
             stage.finalData = assetData;
+            if (rawAssets is List) {
+              await _wikiStore.updateAssets(
+                projectId: _projectId!,
+                assets: rawAssets,
+              );
+            }
           }
           break;
 
         case 3: // 分镜
           _agentCtx!.data['currentStage'] = 'storyboarding';
           _agentCtx!.data['storyboardTemperature'] = _storyboardTemperature;
+          await _refreshCreativeMemory('storyboarding');
           // Inject script for review comparison
           if (stage.finalData != null) {
-            _agentCtx!.data['scriptForReview'] = _formatScriptForReview(stage.finalData!);
+            _agentCtx!.data['scriptForReview'] =
+                _formatScriptForReview(stage.finalData!);
           }
           if (_userFeedback.isNotEmpty) {
             _agentCtx!.data['feedback'] = _userFeedback;
@@ -561,7 +805,8 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
           );
           if (result.success && result.data != null) {
             final storyboardData = result.data as Map<String, dynamic>;
-            final storyboards = storyboardData['storyboards'] as List<Storyboard>?;
+            final storyboards =
+                storyboardData['storyboards'] as List<Storyboard>?;
 
             // Debug: log storyboard save attempt
             await AppLogger.info('Storyboard save check', data: {
@@ -581,16 +826,18 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
                 await StoryboardDao().insertAll(storyboards);
               } else {
                 // Retry: update existing storyboards with new data
-                await AppLogger.info('Updating existing storyboards on retry', data: {
-                  'projectId': _projectId,
-                  'count': storyboards.length,
-                  'ids': storyboards.map((s) => s.id).toList(),
-                });
+                await AppLogger.info('Updating existing storyboards on retry',
+                    data: {
+                      'projectId': _projectId,
+                      'count': storyboards.length,
+                      'ids': storyboards.map((s) => s.id).toList(),
+                    });
                 await StoryboardDao().insertAll(storyboards);
               }
 
               // Verify save by reading back from DB
-              final savedCount = (await StoryboardDao().getByProjectId(_projectId!)).length;
+              final savedCount =
+                  (await StoryboardDao().getByProjectId(_projectId!)).length;
               await AppLogger.info('Storyboard save verified', data: {
                 'projectId': _projectId,
                 'savedCount': savedCount,
@@ -605,7 +852,8 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
             // Inject asset reference images into storyboards for video generation.
             // VideoAgent reads these from script assets, so we must ensure they
             // are populated here before the video stage runs.
-            final scriptData = _agentCtx!.data['script'] as Map<String, dynamic>?;
+            final scriptData =
+                _agentCtx!.data['script'] as Map<String, dynamic>?;
             if (scriptData != null) {
               final assetsWithImages = scriptData['assets'] as List?;
               if (assetsWithImages is List && assetsWithImages.isNotEmpty) {
@@ -621,7 +869,10 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
                     name = a['name'] as String?;
                     refUrl = a['reference_image_url'] as String?;
                   }
-                  if (name != null && name.isNotEmpty && refUrl != null && refUrl.isNotEmpty) {
+                  if (name != null &&
+                      name.isNotEmpty &&
+                      refUrl != null &&
+                      refUrl.isNotEmpty) {
                     assetImageMap[name] = refUrl;
                   }
                 }
@@ -632,7 +883,8 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
                   for (final sb in rawStoryboards) {
                     if (sb is Map<String, dynamic>) {
                       final desc = sb['description'] as String? ?? '';
-                      final firstFramePrompt = sb['first_frame_prompt'] as String? ?? '';
+                      final firstFramePrompt =
+                          sb['first_frame_prompt'] as String? ?? '';
                       final combined = '$desc $firstFramePrompt';
                       // Find which asset names are mentioned in this storyboard
                       final mentionedAssets = <String>[];
@@ -651,14 +903,28 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
             }
 
             stage.finalData = storyboardData;
+            if (storyboards != null) {
+              await _wikiStore.updateStoryboards(
+                projectId: _projectId!,
+                storyboards: storyboards,
+              );
+            }
           }
           break;
 
         case 4: // 视频
+          _agentCtx!.data['currentStage'] = 'generating';
+          await _refreshCreativeMemory('generating');
           if (AppConfig.useSeedanceForVideo) {
             result = await _runSeedanceVideoStage(stage);
           } else {
             result = await _runApiVideoStage(stage);
+          }
+          if (result.success && result.data != null) {
+            await _wikiStore.updateVideoClips(
+              projectId: _projectId!,
+              videoData: result.data as Map<String, dynamic>,
+            );
           }
           break;
 
@@ -674,6 +940,7 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
         // Save completed stages before failing
         await _saveProgressOnError(stage);
 
+        if (!mounted) return;
         setState(() => _creating = false);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -687,7 +954,9 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
                   if (project != null && mounted) {
                     Navigator.pushReplacement(
                       context,
-                      MaterialPageRoute(builder: (_) => CreateProjectScreen(resumeProject: project)),
+                      MaterialPageRoute(
+                          builder: (_) =>
+                              CreateProjectScreen(resumeProject: project)),
                     );
                   }
                 }
@@ -707,7 +976,8 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
       } else {
         stage.status = 'done';
       }
-      stage.contentPreview = _formatPreview(stage.finalData, _stageDefs[_currentStageIndex].reviewType);
+      stage.contentPreview = _formatPreview(
+          stage.finalData, _stageDefs[_currentStageIndex].reviewType);
 
       // Persist project state AFTER stage data is saved to DB.
       // This guarantees that on app relaunch, the state accurately reflects
@@ -717,13 +987,15 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
 
       setState(() {});
     } catch (e, st) {
-      await AppLogger.error('Stage failed', data: {'stage': stage.label}, error: e, stackTrace: st);
+      await AppLogger.error('Stage failed',
+          data: {'stage': stage.label}, error: e, stackTrace: st);
       stage.status = 'error';
       stage.feedback = e.toString();
 
       // Save completed stages before failing
       await _saveProgressOnError(stage);
 
+      if (!mounted) return;
       setState(() => _creating = false);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -737,7 +1009,9 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
                 if (project != null && mounted) {
                   Navigator.pushReplacement(
                     context,
-                    MaterialPageRoute(builder: (_) => CreateProjectScreen(resumeProject: project)),
+                    MaterialPageRoute(
+                        builder: (_) =>
+                            CreateProjectScreen(resumeProject: project)),
                   );
                 }
               }
@@ -762,12 +1036,18 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
 
   String _stageIndexToWorkflowStage(int index) {
     switch (index) {
-      case 0: return 'planning';
-      case 1: return 'scripting';
-      case 2: return 'asseting';
-      case 3: return 'storyboarding';
-      case 4: return 'generating';
-      default: return 'done';
+      case 0:
+        return 'planning';
+      case 1:
+        return 'scripting';
+      case 2:
+        return 'asseting';
+      case 3:
+        return 'storyboarding';
+      case 4:
+        return 'generating';
+      default:
+        return 'done';
     }
   }
 
@@ -780,7 +1060,8 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
     }
     if (stage.finalData == null) {
       final storyboards = await StoryboardDao().getByProjectId(_projectId!);
-      _agentCtx!.data['storyboards'] = storyboards.map((s) => s.toMap()).toList();
+      _agentCtx!.data['storyboards'] =
+          storyboards.map((s) => s.toMap()).toList();
     } else {
       _agentCtx!.data['storyboards'] = stage.finalData!['storyboards'];
     }
@@ -806,13 +1087,15 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
             await VideoClipDao().insert(clip);
 
             if (clipMap['reference_image_url'] != null) {
-              final referenceImageUrl = clipMap['reference_image_url'] as String;
-              final localPath = clipMap['reference_image_local_path'] as String? ??
-                  await PersistentImageStore().persistRemoteImage(
-                    referenceImageUrl,
-                    category: 'storyboards',
-                    entityId: clipMap['storyboard_id'] as String,
-                  );
+              final referenceImageUrl =
+                  clipMap['reference_image_url'] as String;
+              final localPath =
+                  clipMap['reference_image_local_path'] as String? ??
+                      await PersistentImageStore().persistRemoteImage(
+                        referenceImageUrl,
+                        category: 'storyboards',
+                        entityId: clipMap['storyboard_id'] as String,
+                      );
               await StoryboardDao().updateImageUrl(
                 clipMap['storyboard_id'] as String,
                 referenceImageUrl,
@@ -835,7 +1118,9 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
     final contextStoryboards = _agentCtx?.data['storyboards'];
     if (contextStoryboards is List && contextStoryboards.isNotEmpty) {
       storyboards = contextStoryboards
-          .map((sb) => sb is Storyboard ? sb : Storyboard.fromMap(sb as Map<String, dynamic>))
+          .map((sb) => sb is Storyboard
+              ? sb
+              : Storyboard.fromMap(sb as Map<String, dynamic>))
           .toList();
     } else {
       storyboards = await StoryboardDao().getByProjectId(_projectId!);
@@ -871,7 +1156,12 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
             localPath: m['reference_image_local_path']?.toString(),
             remoteUrl: m['reference_image_url']?.toString(),
           );
-          if ((type == 'character' || type == 'prop') && refUrl != null && refUrl.isNotEmpty) {
+          if ((type == 'character' ||
+                  type == 'prop' ||
+                  type == 'location' ||
+                  type == 'scene') &&
+              refUrl != null &&
+              refUrl.isNotEmpty) {
             refImageUrls.add(refUrl);
           }
           if (name.isNotEmpty && refUrl != null && refUrl.isNotEmpty) {
@@ -888,7 +1178,9 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
             localPath: sb.referenceImageLocalPath,
             remoteUrl: sb.referenceImageUrl,
           ) ??
-          (sb.referenceImageUrls?.isNotEmpty == true ? sb.referenceImageUrls!.first : null);
+          (sb.referenceImageUrls?.isNotEmpty == true
+              ? sb.referenceImageUrls!.first
+              : null);
 
       // If storyboard has no image, try to find a matching asset reference image
       // by checking if any asset name is mentioned in the storyboard description
@@ -915,6 +1207,7 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
         storyboardId: sb.id,
         imageUrl: imageUrl,
         prompt: sb.videoPrompt,
+        firstFramePrompt: sb.firstFramePrompt,
         description: sb.description ?? '',
         sceneNum: sb.sceneNum,
         shotNum: sb.shotNum,
@@ -927,6 +1220,9 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
       stage.contentPreview = '正在处理 ${batchItems.length} 个镜头...';
       setState(() {});
 
+      if (!mounted) {
+        return AgentResult.error('页面已关闭，Seedance 视频生成已取消');
+      }
       final result = await Navigator.push<Map<String, String>>(
         context,
         MaterialPageRoute(
@@ -992,7 +1288,8 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
     }
     final currentStage = _stages[_currentStageIndex];
     currentStage.status = 'running';
-    currentStage.messages.add(_ProgressMessage(type: 'warn', text: '--- 根据反馈重新生成 ---'));
+    currentStage.messages
+        .add(_ProgressMessage(type: 'warn', text: '--- 根据反馈重新生成 ---'));
     currentStage.contentPreview = '';
     currentStage.finalData = null;
     setState(() {});
@@ -1004,11 +1301,13 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
     await _projectDao.updateState(_projectId!, 'done');
     final newProject = await _projectDao.getById(_projectId!);
     if (newProject != null && mounted) {
-      await AppLogger.info('Project creation finished', data: {'projectId': _projectId});
+      await AppLogger.info('Project creation finished',
+          data: {'projectId': _projectId});
       if (!mounted) return;
       Navigator.pushReplacement(
         context,
-        MaterialPageRoute(builder: (_) => CreateProjectScreen(resumeProject: newProject)),
+        MaterialPageRoute(
+            builder: (_) => ProjectDetailScreen(project: newProject)),
       );
     }
   }
@@ -1027,7 +1326,8 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
           stage.messages.add(_ProgressMessage(type: 'info', text: '开始生成...'));
           break;
         case StageEventType.retryAttempt:
-          stage.messages.add(_ProgressMessage(type: 'warn', text: '第 ${event.attempt} 次重试...'));
+          stage.messages.add(_ProgressMessage(
+              type: 'warn', text: '第 ${event.attempt} 次重试...'));
           break;
         case StageEventType.generating:
           stage.messages.add(_ProgressMessage(type: 'info', text: '正在生成内容...'));
@@ -1037,25 +1337,33 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
           stage.messages.add(_ProgressMessage(type: 'success', text: '内容生成完成'));
           break;
         case StageEventType.reviewing:
-          stage.messages.add(_ProgressMessage(type: 'info', text: 'DirectorAgent 审阅中...'));
+          stage.messages.add(
+              _ProgressMessage(type: 'info', text: 'DirectorAgent 审阅中...'));
           break;
         case StageEventType.reviewPassed:
-          stage.messages.add(_ProgressMessage(type: 'success', text: '✓ 审阅通过（评分: ${event.score}/10）'));
-          if (event.feedback != null && event.feedback!.isNotEmpty && event.feedback != '通过') {
-            stage.messages.add(_ProgressMessage(type: 'note', text: event.feedback!));
+          stage.messages.add(_ProgressMessage(
+              type: 'success', text: '✓ 审阅通过（评分: ${event.score}/10）'));
+          if (event.feedback != null &&
+              event.feedback!.isNotEmpty &&
+              event.feedback != '通过') {
+            stage.messages
+                .add(_ProgressMessage(type: 'note', text: event.feedback!));
           }
           break;
         case StageEventType.reviewFailed:
           // DirectorAgent will retry internally — this is not a terminal failure
-          stage.messages.add(_ProgressMessage(type: 'warn', text: '✗ 审阅未通过（评分: ${event.score}/10），将自动重试...'));
+          stage.messages.add(_ProgressMessage(
+              type: 'warn', text: '✗ 审阅未通过（评分: ${event.score}/10），将自动重试...'));
           if (event.feedback != null) {
-            stage.messages.add(_ProgressMessage(type: 'warn', text: '修改建议：${event.feedback}'));
+            stage.messages.add(
+                _ProgressMessage(type: 'warn', text: '修改建议：${event.feedback}'));
           }
           break;
         case StageEventType.error:
           // Only add to messages — do NOT change status here.
           // DirectorAgent catches errors internally and may retry.
-          stage.messages.add(_ProgressMessage(type: 'error', text: '错误：${event.feedback ?? "未知错误"}'));
+          stage.messages.add(_ProgressMessage(
+              type: 'error', text: '错误：${event.feedback ?? "未知错误"}'));
           break;
         default:
           break;
@@ -1127,10 +1435,13 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
         final parts = <String>[];
         if (data['genre'] != null) parts.add(' 类型：${data['genre']}');
         if (data['duration'] != null) parts.add('⏱ 时长：${data['duration']} 秒');
-        if (data['aspect_ratio'] != null) parts.add('📐 画面比例：${data['aspect_ratio']}');
+        if (data['aspect_ratio'] != null)
+          parts.add('📐 画面比例：${data['aspect_ratio']}');
         if (data['mood'] != null) parts.add('🎭 情绪基调：${data['mood']}');
-        if (data['visual_style'] != null) parts.add(' 视觉风格：${data['visual_style']}');
-        if (data['story_outline'] != null) parts.add('\n📖 故事大纲：\n${data['story_outline']}');
+        if (data['visual_style'] != null)
+          parts.add(' 视觉风格：${data['visual_style']}');
+        if (data['story_outline'] != null)
+          parts.add('\n📖 故事大纲：\n${data['story_outline']}');
         return parts.join('\n');
       case 'script':
         final rawScenes = data['scenes'] as List?;
@@ -1176,7 +1487,13 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
         if (rawStoryboards == null) return '';
         final lines = <String>[];
         for (final sb in rawStoryboards) {
-          String sceneNum, shotNum, description, shotType, cameraMove, firstFrame, videoPrompt;
+          String sceneNum,
+              shotNum,
+              description,
+              shotType,
+              cameraMove,
+              firstFrame,
+              videoPrompt;
           int duration;
           if (sb is Storyboard) {
             sceneNum = sb.sceneNum.toString();
@@ -1220,10 +1537,10 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
             final state = c['state'] as String?;
             final videoUrl = c['video_url'] as String?;
             final refUrl = c['reference_image_url'] as String?;
-            if (state == 'done' && videoUrl != null) {
+            if ((state == 'completed' || state == 'done') && videoUrl != null) {
               lines.add('━━ 镜头 $sbId ━━');
               lines.add('参考图: ${refUrl ?? "无"}');
-              lines.add('视频: ${videoUrl.substring(0, videoUrl.length.clamp(0, 60))}');
+              lines.add('视频: ${_truncateText(videoUrl, 60)}');
               lines.add('');
               clipSuccess++;
             } else {
@@ -1246,7 +1563,8 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
           String name, type, hasImage;
           if (a is Asset) {
             name = a.name;
-            type = a.type == 'character' ? '角色' : (a.type == 'prop' ? '道具' : '场景');
+            type =
+                a.type == 'character' ? '角色' : (a.type == 'prop' ? '道具' : '场景');
             hasImage = PersistentImageStore.preferredSource(
                       localPath: a.referenceImageLocalPath,
                       remoteUrl: a.referenceImageUrl,
@@ -1256,7 +1574,9 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
                 : '✗';
           } else if (a is Map<String, dynamic>) {
             name = a['name'] as String? ?? '?';
-            type = a['type'] == 'character' ? '角色' : (a['type'] == 'prop' ? '道具' : '场景');
+            type = a['type'] == 'character'
+                ? '角色'
+                : (a['type'] == 'prop' ? '道具' : '场景');
             hasImage = PersistentImageStore.preferredSource(
                       localPath: a['reference_image_local_path'] as String?,
                       remoteUrl: a['reference_image_url'] as String?,
@@ -1300,6 +1620,8 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
             ),
           ),
 
+          if (!_creating && !_isResuming) _buildDirectorGuidancePanel(),
+
           // Progress area
           Expanded(
             child: _stages.isEmpty
@@ -1309,7 +1631,9 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
                       children: [
                         Icon(Icons.auto_awesome, size: 48, color: Colors.grey),
                         SizedBox(height: 12),
-                        Text('输入创意后，AI 将逐步为你生成策划、编剧和分镜', style: TextStyle(color: Colors.grey), textAlign: TextAlign.center),
+                        Text('输入创意后，AI 将逐步为你生成策划、编剧和分镜',
+                            style: TextStyle(color: Colors.grey),
+                            textAlign: TextAlign.center),
                       ],
                     ),
                   )
@@ -1322,6 +1646,183 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
           // Bottom action bar
           _buildBottomBar(),
         ],
+      ),
+    );
+  }
+
+  Widget _buildDirectorGuidancePanel() {
+    if (_analyzingGuidance) {
+      return Padding(
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+        child: Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: Theme.of(context).colorScheme.surfaceContainerHighest,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: Colors.grey.shade700),
+          ),
+          child: const Row(
+            children: [
+              SizedBox(
+                width: 18,
+                height: 18,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+              SizedBox(width: 10),
+              Expanded(child: Text('DirectorAgent 正在分析创意缺口...')),
+            ],
+          ),
+        ),
+      );
+    }
+
+    if (_guidanceQuestions.isEmpty) {
+      return Padding(
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+        child: Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: Theme.of(context).colorScheme.surfaceContainerHighest,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: Colors.grey.shade700),
+          ),
+          child: Row(
+            children: [
+              const Icon(Icons.psychology_alt, size: 18),
+              const SizedBox(width: 8),
+              const Expanded(
+                child: Text('点击开始后，DirectorAgent 会先分析创意缺口，再逐步提问。'),
+              ),
+              TextButton.icon(
+                onPressed: _promptController.text.trim().isEmpty
+                    ? null
+                    : _analyzeGuidanceQuestions,
+                icon: const Icon(Icons.search, size: 16),
+                label: const Text('先分析'),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    final question = _guidanceQuestions[_guidanceStep];
+    final answeredCount = _guidanceQuestions
+        .where(
+            (q) => (_directorGuidanceAnswers[q.id]?.trim().isNotEmpty ?? false))
+        .length;
+    final isFirst = _guidanceStep == 0;
+    final isLast = _guidanceStep == _guidanceQuestions.length - 1;
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: Theme.of(context).colorScheme.surfaceContainerHighest,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: Colors.grey.shade700),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Row(
+              children: [
+                const Icon(Icons.psychology_alt, size: 18),
+                const SizedBox(width: 8),
+                const Expanded(
+                  child: Text(
+                    'DirectorAgent 创作问诊',
+                    style: TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                ),
+                Text(
+                  '$answeredCount/${_guidanceQuestions.length}',
+                  style: TextStyle(color: Colors.grey.shade400, fontSize: 12),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: [
+                for (var i = 0; i < _guidanceQuestions.length; i++)
+                  ChoiceChip(
+                    label: Text('${i + 1}'),
+                    selected: i == _guidanceStep,
+                    showCheckmark: false,
+                    avatar: (_directorGuidanceAnswers[_guidanceQuestions[i].id]
+                                ?.trim()
+                                .isNotEmpty ??
+                            false)
+                        ? const Icon(Icons.check, size: 14)
+                        : null,
+                    onSelected: (_) => _goToGuidanceStep(i),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Text(
+              question.title,
+              style: const TextStyle(fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              question.question,
+              style: TextStyle(color: Colors.grey.shade300, fontSize: 13),
+            ),
+            const SizedBox(height: 10),
+            TextField(
+              controller: _guidanceController,
+              maxLines: 3,
+              decoration: InputDecoration(
+                hintText: question.hint,
+                border: const OutlineInputBorder(),
+                alignLabelWithHint: true,
+                contentPadding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              ),
+              onChanged: (value) {
+                if (value.trim().isEmpty) {
+                  _directorGuidanceAnswers.remove(question.id);
+                } else {
+                  _directorGuidanceAnswers[question.id] = value.trim();
+                }
+                setState(() {});
+              },
+            ),
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                OutlinedButton.icon(
+                  onPressed: isFirst
+                      ? null
+                      : () => _goToGuidanceStep(_guidanceStep - 1),
+                  icon: const Icon(Icons.chevron_left),
+                  label: const Text('上一步'),
+                ),
+                const SizedBox(width: 8),
+                FilledButton.icon(
+                  onPressed: isLast
+                      ? null
+                      : () => _goToGuidanceStep(_guidanceStep + 1),
+                  icon: const Icon(Icons.chevron_right),
+                  label: const Text('下一步'),
+                ),
+                const Spacer(),
+                Text(
+                  '生成前先补全，后续 LLM 会按这些约束写 Brief',
+                  style: TextStyle(color: Colors.grey.shade500, fontSize: 11),
+                ),
+              ],
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -1349,7 +1850,8 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
                   localPath: localPath,
                   fit: BoxFit.contain,
                   placeholder: const Center(
-                    child: Icon(Icons.broken_image, size: 64, color: Colors.grey),
+                    child:
+                        Icon(Icons.broken_image, size: 64, color: Colors.grey),
                   ),
                 ),
               ),
@@ -1369,7 +1871,10 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
               left: 16,
               child: Text(
                 title,
-                style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+                style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold),
               ),
             ),
           ],
@@ -1383,13 +1888,15 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
     final assetData = stage.finalData;
     final rawAssets = assetData?['assets'] as List?;
     if (rawAssets == null || rawAssets.isEmpty) {
-      return const Text('无资产数据', style: TextStyle(color: Colors.grey, fontSize: 13));
+      return const Text('无资产数据',
+          style: TextStyle(color: Colors.grey, fontSize: 13));
     }
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Text('参考图预览：', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+        const Text('参考图预览：',
+            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
         const SizedBox(height: 8),
         ...rawAssets.map((a) {
           String name, type, imageUrl, assetId;
@@ -1409,7 +1916,8 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
           } else {
             return const SizedBox.shrink();
           }
-          final typeLabel = type == 'character' ? '角色' : (type == 'prop' ? '道具' : '场景');
+          final typeLabel =
+              type == 'character' ? '角色' : (type == 'prop' ? '道具' : '场景');
           final displaySource = PersistentImageStore.preferredSource(
             localPath: localPath,
             remoteUrl: imageUrl,
@@ -1443,7 +1951,8 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
                             )
                           : Container(
                               color: Colors.grey.shade800,
-                              child: const Icon(Icons.image_not_supported, color: Colors.grey),
+                              child: const Icon(Icons.image_not_supported,
+                                  color: Colors.grey),
                             ),
                     ),
                   ),
@@ -1456,25 +1965,31 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
                     children: [
                       Text(
                         name,
-                        style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                        style: const TextStyle(
+                            fontWeight: FontWeight.bold, fontSize: 14),
                       ),
                       const SizedBox(height: 2),
                       Text(
                         typeLabel,
-                        style: TextStyle(color: Colors.grey.shade400, fontSize: 12),
+                        style: TextStyle(
+                            color: Colors.grey.shade400, fontSize: 12),
                       ),
                       const SizedBox(height: 4),
                       Row(
                         children: [
                           if (imageUrl.isNotEmpty)
-                            const Icon(Icons.check_circle, color: Colors.green, size: 14)
+                            const Icon(Icons.check_circle,
+                                color: Colors.green, size: 14)
                           else
-                            const Icon(Icons.error, color: Colors.red, size: 14),
+                            const Icon(Icons.error,
+                                color: Colors.red, size: 14),
                           const SizedBox(width: 4),
                           Text(
                             imageUrl.isNotEmpty ? '已生成' : '生成失败',
                             style: TextStyle(
-                              color: imageUrl.isNotEmpty ? Colors.green : Colors.red,
+                              color: imageUrl.isNotEmpty
+                                  ? Colors.green
+                                  : Colors.red,
                               fontSize: 12,
                             ),
                           ),
@@ -1483,17 +1998,37 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
                     ],
                   ),
                 ),
-                // Regenerate button
+                // Regenerate + Download buttons
                 if (imageUrl.isNotEmpty)
-                  OutlinedButton.icon(
-                    onPressed: () => _regenerateAsset(stage, assetId),
-                    icon: const Icon(Icons.refresh, size: 16),
-                    label: const Text('重新生成', style: TextStyle(fontSize: 12)),
-                    style: OutlinedButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                      minimumSize: Size.zero,
-                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                    ),
+                  Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      OutlinedButton.icon(
+                        onPressed: () => _regenerateAsset(stage, assetId),
+                        icon: const Icon(Icons.refresh, size: 16),
+                        label:
+                            const Text('重新生成', style: TextStyle(fontSize: 12)),
+                        style: OutlinedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 8, vertical: 4),
+                          minimumSize: Size.zero,
+                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      OutlinedButton.icon(
+                        onPressed: () =>
+                            _downloadAssetImage(name, typeLabel, displaySource),
+                        icon: const Icon(Icons.download, size: 16),
+                        label: const Text('下载', style: TextStyle(fontSize: 12)),
+                        style: OutlinedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 8, vertical: 4),
+                          minimumSize: Size.zero,
+                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        ),
+                      ),
+                    ],
                   ),
               ],
             ),
@@ -1501,6 +2036,90 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
         }),
       ],
     );
+  }
+
+  /// Download an asset image to the user's Downloads folder.
+  Future<void> _downloadAssetImage(
+      String name, String typeLabel, String? displaySource) async {
+    if (displaySource == null || displaySource.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('没有可用的图片')),
+        );
+      }
+      return;
+    }
+
+    try {
+      String sourcePath;
+
+      if (PersistentImageStore.isLocalPath(displaySource)) {
+        sourcePath =
+            PersistentImageStore.normalizeLocalPath(displaySource) ?? '';
+      } else {
+        // Remote URL: download to temp first
+        final response = await http.Client()
+            .get(Uri.parse(displaySource))
+            .timeout(const Duration(seconds: 60));
+        if (response.statusCode != 200) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('下载远程图片失败')),
+            );
+          }
+          return;
+        }
+        final tempDir = Directory.systemTemp;
+        final tempFile = File(p.join(tempDir.path,
+            'storyforge_download_${DateTime.now().millisecondsSinceEpoch}.png'));
+        await tempFile.writeAsBytes(response.bodyBytes);
+        sourcePath = tempFile.path;
+      }
+
+      if (sourcePath.isEmpty || !File(sourcePath).existsSync()) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('图片文件不存在')),
+          );
+        }
+        return;
+      }
+
+      // Copy to user's Downloads folder
+      final downloadsDir = Directory(p.join(
+          Platform.environment['USERPROFILE'] ?? 'C:\\Users', 'Downloads'));
+      if (!downloadsDir.existsSync()) {
+        await downloadsDir.create(recursive: true);
+      }
+
+      final ext =
+          p.extension(sourcePath).isEmpty ? '.png' : p.extension(sourcePath);
+      final safeName = name.replaceAll(RegExp(r'[<>:"/\\|?*]'), '_');
+      final destPath = p.join(downloadsDir.path, '${safeName}_$typeLabel$ext');
+
+      // Avoid overwriting: append number if file exists
+      var finalPath = destPath;
+      var counter = 1;
+      while (File(finalPath).existsSync()) {
+        finalPath =
+            p.join(downloadsDir.path, '${safeName}_$typeLabel($counter)$ext');
+        counter++;
+      }
+
+      await File(sourcePath).copy(finalPath);
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('已保存到 ${p.basename(finalPath)}')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('下载失败: $e')),
+        );
+      }
+    }
   }
 
   /// Show dialog for asset regeneration feedback, then regenerate
@@ -1523,7 +2142,8 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
       } else if (a is Map<String, dynamic> && a['id'] == assetId) {
         name = a['name'] as String? ?? '?';
         type = a['type'] as String? ?? '?';
-        basePrompt = a['prompt'] as String? ?? a['description'] as String? ?? '';
+        basePrompt =
+            a['prompt'] as String? ?? a['description'] as String? ?? '';
         break;
       }
     }
@@ -1538,13 +2158,14 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
     }
 
     // Show dialog that displays current description and allows editing
-    final result = await _showRegenerateFeedbackDialog(name!, type!, basePrompt);
+    final result = await _showRegenerateFeedbackDialog(name, type, basePrompt);
     if (result == null) return; // User cancelled
     final editedDescription = result.description;
     final feedback = result.feedback;
 
     // Use the edited description if provided, otherwise use the original
-    final effectiveDescription = editedDescription.isNotEmpty ? editedDescription : basePrompt;
+    final effectiveDescription =
+        editedDescription.isNotEmpty ? editedDescription : basePrompt;
 
     // Build the enhanced prompt using the SAME structure as AssetDesignAgent._buildAssetPrompt()
     // This ensures consistent image generation quality
@@ -1588,8 +2209,10 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
 
     final enhancedPrompt = buffer.toString();
 
-    final typeLabel = type == 'character' ? '角色' : (type == 'prop' ? '道具' : '场景');
-    stage.messages.add(_ProgressMessage(type: 'info', text: '正在重新生成 $typeLabel: $name...'));
+    final typeLabel =
+        type == 'character' ? '角色' : (type == 'prop' ? '道具' : '场景');
+    stage.messages.add(
+        _ProgressMessage(type: 'info', text: '正在重新生成 $typeLabel: $name...'));
     setState(() {});
 
     try {
@@ -1602,7 +2225,8 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
       );
 
       if (imageUrl.isEmpty) {
-        stage.messages.add(_ProgressMessage(type: 'error', text: '$typeLabel: $name 重新生成失败：返回了空 URL'));
+        stage.messages.add(_ProgressMessage(
+            type: 'error', text: '$typeLabel: $name 重新生成失败：返回了空 URL'));
         setState(() {});
         return;
       }
@@ -1638,7 +2262,8 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
       }
 
       if (!found) {
-        stage.messages.add(_ProgressMessage(type: 'warn', text: '$typeLabel: $name 在数据中未找到，图片已生成但未更新'));
+        stage.messages.add(_ProgressMessage(
+            type: 'warn', text: '$typeLabel: $name 在数据中未找到，图片已生成但未更新'));
       }
 
       // Update in context for downstream stages (handle both Asset objects and Maps)
@@ -1678,9 +2303,11 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
         localPath: localPath,
       );
 
-      stage.messages.add(_ProgressMessage(type: 'success', text: '$typeLabel: $name 重新生成完成'));
+      stage.messages.add(
+          _ProgressMessage(type: 'success', text: '$typeLabel: $name 重新生成完成'));
     } catch (e) {
-      stage.messages.add(_ProgressMessage(type: 'error', text: '$typeLabel: $name 重新生成失败: $e'));
+      stage.messages.add(_ProgressMessage(
+          type: 'error', text: '$typeLabel: $name 重新生成失败: $e'));
     }
 
     // Clear Flutter's image cache to force reload of updated local image files.
@@ -1695,12 +2322,14 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
 
   /// Show dialog that displays current asset description and allows editing.
   /// Returns (editedDescription, feedback) tuple, or null if cancelled.
-  Future<({String description, String feedback})?> _showRegenerateFeedbackDialog(
+  Future<({String description, String feedback})?>
+      _showRegenerateFeedbackDialog(
     String assetName,
     String assetType,
     String currentDescription,
   ) async {
-    final typeLabel = assetType == 'character' ? '角色' : (assetType == 'prop' ? '道具' : '场景');
+    final typeLabel =
+        assetType == 'character' ? '角色' : (assetType == 'prop' ? '道具' : '场景');
     final descController = TextEditingController(text: currentDescription);
     final feedbackController = TextEditingController();
 
@@ -1713,7 +2342,8 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text('当前描述：', style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold)),
+              const Text('当前描述：',
+                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold)),
               const SizedBox(height: 8),
               Container(
                 padding: const EdgeInsets.all(8),
@@ -1727,7 +2357,8 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
                 ),
               ),
               const SizedBox(height: 12),
-              const Text('编辑描述（用于图像生成）：', style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold)),
+              const Text('编辑描述（用于图像生成）：',
+                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold)),
               const SizedBox(height: 8),
               TextField(
                 controller: descController,
@@ -1790,31 +2421,44 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
                 children: [
                   Icon(stage.icon, size: 20, color: stage.color),
                   const SizedBox(width: 8),
-                  Text(stage.label, style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: stage.color)),
+                  Text(stage.label,
+                      style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 16,
+                          color: stage.color)),
                   const Spacer(),
                   if (isRunning)
-                    const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)),
+                    const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2)),
                   if (isDone)
-                    const Icon(Icons.check_circle, color: Colors.green, size: 18),
+                    const Icon(Icons.check_circle,
+                        color: Colors.green, size: 18),
                   if (isError)
                     const Icon(Icons.error, color: Colors.red, size: 18),
                   if (stage.status == 'warn')
-                    const Icon(Icons.warning_amber, color: Colors.orange, size: 18),
+                    const Icon(Icons.warning_amber,
+                        color: Colors.orange, size: 18),
                 ],
               ),
 
               const SizedBox(height: 6),
-              Text(_statusLabel(stage), style: const TextStyle(fontSize: 12, color: Colors.grey)),
+              Text(_statusLabel(stage),
+                  style: const TextStyle(fontSize: 12, color: Colors.grey)),
 
               // Messages
               if (stage.messages.isNotEmpty) ...[
                 const SizedBox(height: 8),
                 Container(
                   padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(color: Colors.grey.shade900, borderRadius: BorderRadius.circular(6)),
+                  decoration: BoxDecoration(
+                      color: Colors.grey.shade900,
+                      borderRadius: BorderRadius.circular(6)),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
-                    children: stage.messages.map((m) => _buildMessage(m)).toList(),
+                    children:
+                        stage.messages.map((m) => _buildMessage(m)).toList(),
                   ),
                 ),
               ],
@@ -1824,14 +2468,18 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
                 const SizedBox(height: 8),
                 Container(
                   padding: const EdgeInsets.all(10),
-                  decoration: BoxDecoration(color: Colors.grey.shade900, borderRadius: BorderRadius.circular(6)),
-                  child: SelectableText(stage.contentPreview, style: const TextStyle(fontSize: 13)),
+                  decoration: BoxDecoration(
+                      color: Colors.grey.shade900,
+                      borderRadius: BorderRadius.circular(6)),
+                  child: SelectableText(stage.contentPreview,
+                      style: const TextStyle(fontSize: 13)),
                 ),
               ],
 
               // Asset design review: show images with regenerate buttons
               // Show for both done and warn status (partially generated)
-              if (stage.label == '角色设计' && (isDone || stage.status == 'warn')) ...[
+              if (stage.label == '角色设计' &&
+                  (isDone || stage.status == 'warn')) ...[
                 const SizedBox(height: 8),
                 _buildAssetReview(stage),
               ],
@@ -1846,11 +2494,25 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
     Color color;
     String icon;
     switch (m.type) {
-      case 'success': color = Colors.green; icon = '✓'; break;
-      case 'error': color = Colors.red; icon = '✗'; break;
-      case 'warn': color = Colors.orange; icon = '→'; break;
-      case 'note': color = Colors.grey; icon = '  '; break;
-      default: color = Colors.blue; icon = '○';
+      case 'success':
+        color = Colors.green;
+        icon = '✓';
+        break;
+      case 'error':
+        color = Colors.red;
+        icon = '✗';
+        break;
+      case 'warn':
+        color = Colors.orange;
+        icon = '→';
+        break;
+      case 'note':
+        color = Colors.grey;
+        icon = '  ';
+        break;
+      default:
+        color = Colors.blue;
+        icon = '○';
     }
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 1),
@@ -1859,7 +2521,9 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
         children: [
           Text(icon, style: TextStyle(color: color, fontSize: 12)),
           const SizedBox(width: 6),
-          Expanded(child: SelectableText(m.text, style: TextStyle(color: color, fontSize: 12))),
+          Expanded(
+              child: SelectableText(m.text,
+                  style: TextStyle(color: color, fontSize: 12))),
         ],
       ),
     );
@@ -1867,11 +2531,16 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
 
   String _statusLabel(StageProgress stage) {
     switch (stage.status) {
-      case 'running': return '进行中...';
-      case 'done': return '已完成，请审阅';
-      case 'warn': return '部分完成';
-      case 'error': return '失败';
-      default: return '等待中';
+      case 'running':
+        return '进行中...';
+      case 'done':
+        return '已完成，请审阅';
+      case 'warn':
+        return '部分完成';
+      case 'error':
+        return '失败';
+      default:
+        return '等待中';
     }
   }
 
@@ -1901,7 +2570,8 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
               const Spacer(),
               Text(
                 _storyboardTemperature.toStringAsFixed(1),
-                style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
+                style:
+                    const TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
               ),
             ],
           ),
@@ -1977,7 +2647,9 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
       );
     }
 
-    final currentStage = _currentStageIndex < _stages.length ? _stages[_currentStageIndex] : null;
+    final currentStage = _currentStageIndex < _stages.length
+        ? _stages[_currentStageIndex]
+        : null;
     final isDone = currentStage?.status == 'done';
     final isWarn = currentStage?.status == 'warn';
     final isError = currentStage?.status == 'error';
@@ -2002,7 +2674,8 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
             FilledButton.icon(
               onPressed: () {
                 currentStage?.status = 'running';
-                currentStage?.messages.add(_ProgressMessage(type: 'warn', text: '--- 重新生成 ---'));
+                currentStage?.messages
+                    .add(_ProgressMessage(type: 'warn', text: '--- 重新生成 ---'));
                 currentStage?.contentPreview = '';
                 currentStage?.finalData = null;
                 setState(() {});
@@ -2042,7 +2715,8 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
                     ? '可选：输入修改建议，或直接点击"完成并进入详情页"'
                     : '可选：输入修改建议，或直接点击"${isLastStage ? '完成并进入详情页' : '同意并继续'}"',
                 border: const OutlineInputBorder(),
-                contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                contentPadding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
               ),
               onChanged: (v) => _userFeedback = v,
             ),
@@ -2059,7 +2733,8 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
                 const SizedBox(width: 12),
                 Expanded(
                   child: FilledButton.icon(
-                    onPressed: isLastStage ? _finishProject : _approveAndContinue,
+                    onPressed:
+                        isLastStage ? _finishProject : _approveAndContinue,
                     icon: Icon(isLastStage ? Icons.check : Icons.arrow_forward),
                     label: Text(isLastStage ? '完成并进入详情页' : '同意并继续'),
                   ),
@@ -2077,6 +2752,7 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
   @override
   void dispose() {
     _promptController.dispose();
+    _guidanceController.dispose();
     _llm.dispose();
     super.dispose();
   }
@@ -2089,7 +2765,11 @@ class StageDef {
   final Color color;
   final String reviewType;
 
-  const StageDef({required this.label, required this.icon, required this.color, required this.reviewType});
+  const StageDef(
+      {required this.label,
+      required this.icon,
+      required this.color,
+      required this.reviewType});
 }
 
 /// Tracks the progress of a single workflow stage
@@ -2112,4 +2792,9 @@ class _ProgressMessage {
   final String text;
 
   _ProgressMessage({required this.type, required this.text});
+}
+
+String _truncateText(String value, int maxLength) {
+  if (value.length <= maxLength) return value;
+  return value.substring(0, maxLength);
 }

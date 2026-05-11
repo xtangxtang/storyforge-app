@@ -89,12 +89,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
           children: [
             _sectionTitle('文本生成 (LLM)'),
             _textField('LLM Base URL', _llmBaseUrlController,
-                hint: 'https://coding.dashscope.aliyuncs.com/v1 或 https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1',
+                hint:
+                    'https://coding.dashscope.aliyuncs.com/v1 或 https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1',
                 icon: Icons.link),
             const SizedBox(height: 12),
             _textField('LLM API Key', _llmKeyController,
                 hint: 'sk-...（用于 qwen3.6-plus 文本生成）',
-                icon: Icons.key, obscure: true),
+                icon: Icons.key,
+                obscure: true),
             const SizedBox(height: 12),
             _textField('LLM 模型', _llmModelController,
                 hint: 'qwen3.6-plus', icon: Icons.smart_toy),
@@ -102,12 +104,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
             const SizedBox(height: 24),
             _sectionTitle('图像生成'),
             _textField('图像 Base URL', _imageBaseUrlController,
-                hint: 'https://dashscope.aliyuncs.com 或 https://token-plan.cn-beijing.maas.aliyuncs.com（不要带 /v1 或 /compatible-mode）',
+                hint:
+                    'https://dashscope.aliyuncs.com 或 https://token-plan.cn-beijing.maas.aliyuncs.com（不要带 /v1 或 /compatible-mode）',
                 icon: Icons.image),
             const SizedBox(height: 12),
             _textField('图像 API Key', _imageKeyController,
                 hint: 'MAAS Token Plan API Key（用于 wan2.7-image-pro）',
-                icon: Icons.key, obscure: true),
+                icon: Icons.key,
+                obscure: true),
             const SizedBox(height: 12),
             _textField('图像模型', _imageModelController,
                 hint: 'wan2.7-image-pro', icon: Icons.image_outlined),
@@ -130,8 +134,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   const SizedBox(height: 4),
                   RadioListTile<String>(
                     title: const Text('API 模式 (wan2.7-i2v)'),
-                    subtitle: const Text(
-                        '使用 DashScope API，需要配置 API Key',
+                    subtitle: const Text('使用 DashScope API，需要配置 API Key',
                         style: TextStyle(fontSize: 12)),
                     value: 'api',
                     groupValue: _videoMode,
@@ -140,8 +143,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ),
                   RadioListTile<String>(
                     title: const Text('Seedance Web 自动化'),
-                    subtitle: const Text(
-                        '使用 Seedance 2.0 网页，需要配置 Google 登录',
+                    subtitle: const Text('使用 Seedance 2.0 网页，需要配置 Google 登录',
                         style: TextStyle(fontSize: 12)),
                     value: 'seedance',
                     groupValue: _videoMode,
@@ -155,11 +157,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
             // Show API config fields when in API mode
             if (_videoMode == 'api') ...[
               _textField('视频 Base URL', _videoBaseUrlController,
-                  hint: 'https://dashscope.aliyuncs.com 或 https://token-plan.cn-beijing.maas.aliyuncs.com', icon: Icons.videocam),
+                  hint:
+                      'https://dashscope.aliyuncs.com 或 https://token-plan.cn-beijing.maas.aliyuncs.com',
+                  icon: Icons.videocam),
               const SizedBox(height: 12),
               _textField('视频 API Key', _videoKeyController,
                   hint: 'MAAS Token Plan API Key 或 DashScope Key',
-                  icon: Icons.key, obscure: true),
+                  icon: Icons.key,
+                  obscure: true),
               const SizedBox(height: 12),
               _textField('视频模型', _videoModelController,
                   hint: 'wan2.7-i2v', icon: Icons.videocam_outlined),
@@ -193,10 +198,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ],
                 ),
               ),
-              const SizedBox(height: 12),
-              _textField('Seedance 网址（备用）', _videoBaseUrlController,
-                  hint: 'API 模式才需要，Seedance 模式可留空',
-                  icon: Icons.videocam),
             ],
 
             const SizedBox(height: 24),
@@ -210,17 +211,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 hint: 'https://seedance.io/zh/seedance-2', icon: Icons.web),
             const SizedBox(height: 12),
             _textField('Google 邮箱', _seedanceEmailController,
-                hint: 'yourname@gmail.com',
-                icon: Icons.email, obscure: false),
+                hint: 'yourname@gmail.com', icon: Icons.email, obscure: false),
             const SizedBox(height: 12),
             _textField('Google 密码', _seedancePasswordController,
-                hint: '你的 Google 账号密码',
-                icon: Icons.lock, obscure: true),
+                hint: '你的 Google 账号密码', icon: Icons.lock, obscure: true),
             const SizedBox(height: 8),
             const Text(
               '• 使用 Google 邮箱和密码登录 seedance.io\n'
-              '• 打开 Seedance 浏览器时会自动通过 Google 登录',
-              style: TextStyle(color: Colors.grey, fontSize: 12),
+              '• 当前凭据通过 SharedPreferences 保存在本机，建议优先手动登录或使用专用账号',
+              style: TextStyle(color: Colors.orange, fontSize: 12),
             ),
 
             const SizedBox(height: 32),
@@ -230,7 +229,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 onPressed: _saving ? null : _save,
                 icon: _saving
                     ? const SizedBox(
-                        width: 20, height: 20,
+                        width: 20,
+                        height: 20,
                         child: CircularProgressIndicator(strokeWidth: 2),
                       )
                     : const Icon(Icons.save),

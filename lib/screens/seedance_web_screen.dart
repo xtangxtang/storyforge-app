@@ -1,28 +1,32 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'package:http/http.dart' as http;
 import 'package:flutter/material.dart';
 import 'package:webview_windows/webview_windows.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../config/app_config.dart';
+import '../services/http_client_factory.dart';
 import '../services/persistent_image_store.dart';
+import '../widgets/persistent_image.dart';
 
 /// Storyboard data passed from project_detail_screen for batch video generation.
 class SeedanceStoryboardItem {
   final String storyboardId;
   final String? imageUrl;
   final String? prompt;
+  final String? firstFramePrompt;
   final String description;
   final int sceneNum;
   final int shotNum;
-  /// Additional reference images (characters, props) to upload alongside the first frame.
+
+  /// Additional reference images (characters, props, scenes) to upload alongside the first frame.
   final List<String>? referenceImageUrls;
 
   SeedanceStoryboardItem({
     required this.storyboardId,
     required this.imageUrl,
     this.prompt,
+    this.firstFramePrompt,
     required this.description,
     required this.sceneNum,
     required this.shotNum,
@@ -48,7 +52,8 @@ class SeedanceWebScreen extends StatefulWidget {
     this.batchStoryboards,
   });
 
-  bool get isBatchMode => batchStoryboards != null && batchStoryboards!.isNotEmpty;
+  bool get isBatchMode =>
+      batchStoryboards != null && batchStoryboards!.isNotEmpty;
 
   @override
   State<SeedanceWebScreen> createState() => _SeedanceWebScreenState();
@@ -100,7 +105,8 @@ class _SeedanceWebScreenState extends State<SeedanceWebScreen> {
 
   bool _isSeedanceEntryPage(String url) {
     final normalized = url.toLowerCase();
-    return normalized.contains('seedance.io') && normalized.contains('/seedance-2');
+    return normalized.contains('seedance.io') &&
+        normalized.contains('/seedance-2');
   }
 
   bool _isSeedanceAllowedResultPage(String url) {
@@ -145,7 +151,8 @@ class _SeedanceWebScreenState extends State<SeedanceWebScreen> {
         // Redirect guard: keep the automation anchored on Seedance 2 until we
         // explicitly allow navigation to result pages after clicking generate.
         if (!_allowOffEntryNavigation && _shouldForceBackToEntry(url)) {
-          debugPrint('Redirect guard: detected navigation away from /zh/seedance-2 to: $url');
+          debugPrint(
+              'Redirect guard: detected navigation away from /zh/seedance-2 to: $url');
           _controller.loadUrl(AppConfig.seedanceUrl);
         }
       });
@@ -180,7 +187,8 @@ class _SeedanceWebScreenState extends State<SeedanceWebScreen> {
           _currentUrl.contains('seedance.io') &&
           !_isSeedanceEntryPage(_currentUrl) &&
           !_isSeedanceAllowedResultPage(_currentUrl)) {
-        debugPrint('Page on unexpected Seedance page: $_currentUrl, navigating back to seedance-2');
+        debugPrint(
+            'Page on unexpected Seedance page: $_currentUrl, navigating back to seedance-2');
         setState(() => _statusMessage = '页面被重定向，正在返回 seedance-2...');
         await _controller.loadUrl(AppConfig.seedanceUrl);
         await Future.delayed(const Duration(seconds: 5));
@@ -275,7 +283,8 @@ class _SeedanceWebScreenState extends State<SeedanceWebScreen> {
 
   Future<void> _showGoogleLoginSettings() async {
     final emailCtrl = TextEditingController(text: AppConfig.seedanceEmail);
-    final passwordCtrl = TextEditingController(text: AppConfig.seedancePassword);
+    final passwordCtrl =
+        TextEditingController(text: AppConfig.seedancePassword);
     final saved = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -383,10 +392,13 @@ class _SeedanceWebScreenState extends State<SeedanceWebScreen> {
     try {
       final result = await _controller.executeScript(script);
       return result?.toString() ?? 'error';
-    } catch (e) { return 'error: $e'; }
+    } catch (e) {
+      return 'error: $e';
+    }
   }
 
-  Future<void> _waitForUrlContains(String pattern, {int timeoutSeconds = 15}) async {
+  Future<void> _waitForUrlContains(String pattern,
+      {int timeoutSeconds = 15}) async {
     final startTime = DateTime.now();
     while (DateTime.now().difference(startTime).inSeconds < timeoutSeconds) {
       if (_currentUrl.contains(pattern)) return;
@@ -435,10 +447,14 @@ class _SeedanceWebScreenState extends State<SeedanceWebScreen> {
     })();
     ''';
     try {
-      final escapedEmail = email.replaceAll('\\', '\\\\').replaceAll("'", "\\'");
-      final result = await _controller.executeScript(script.replaceAll('%EMAIL%', escapedEmail));
+      final escapedEmail =
+          email.replaceAll('\\', '\\\\').replaceAll("'", "\\'");
+      final result = await _controller
+          .executeScript(script.replaceAll('%EMAIL%', escapedEmail));
       return result?.toString() ?? 'error';
-    } catch (e) { return 'error: $e'; }
+    } catch (e) {
+      return 'error: $e';
+    }
   }
 
   Future<String> _fillGooglePassword(String password) async {
@@ -484,10 +500,14 @@ class _SeedanceWebScreenState extends State<SeedanceWebScreen> {
     })();
     ''';
     try {
-      final jsSafePassword = password.replaceAll('\\', '\\\\').replaceAll("'", "\\'");
-      final result = await _controller.executeScript(script.replaceAll('%PASSWORD%', jsSafePassword));
+      final jsSafePassword =
+          password.replaceAll('\\', '\\\\').replaceAll("'", "\\'");
+      final result = await _controller
+          .executeScript(script.replaceAll('%PASSWORD%', jsSafePassword));
       return result?.toString() ?? 'error';
-    } catch (e) { return 'error: $e'; }
+    } catch (e) {
+      return 'error: $e';
+    }
   }
 
   // ===================================================================
@@ -641,7 +661,8 @@ class _SeedanceWebScreenState extends State<SeedanceWebScreen> {
     for (final url in urlsToTry) {
       try {
         debugPrint('Trying window.location.href = $url');
-        final script = '(function() { window.location.href = "$url"; return "ok"; })();';
+        final script =
+            '(function() { window.location.href = "$url"; return "ok"; })();';
         await _controller.executeScript(script);
         await Future.delayed(const Duration(milliseconds: 2000));
         if (_isOnImageToVideoPage()) {
@@ -817,7 +838,8 @@ class _SeedanceWebScreenState extends State<SeedanceWebScreen> {
     ''';
     try {
       final result = await _controller.executeScript(script);
-      setState(() => _statusMessage = '子Tab: ${result?.toString() ?? "unknown"}');
+      setState(
+          () => _statusMessage = '子Tab: ${result?.toString() ?? "unknown"}');
     } catch (e) {
       setState(() => _statusMessage = '子Tab切换失败: $e');
     }
@@ -834,19 +856,37 @@ class _SeedanceWebScreenState extends State<SeedanceWebScreen> {
           bytes = await File(filePath).readAsBytes();
         }
       } else {
-        final response = await http.get(Uri.parse(imageUrl));
-        if (response.statusCode == 200) {
-          bytes = response.bodyBytes;
+        final client = createConfiguredHttpClient();
+        try {
+          final response = await client
+              .get(Uri.parse(imageUrl))
+              .timeout(const Duration(seconds: 120));
+          if (response.statusCode == 200) {
+            bytes = response.bodyBytes;
+          }
+        } finally {
+          client.close();
         }
       }
 
       if (bytes != null && bytes.isNotEmpty) {
         final base64String = base64Encode(bytes);
-        if (bytes.length >= 3 && bytes[0] == 0xFF && bytes[1] == 0xD8 && bytes[2] == 0xFF) {
+        if (bytes.length >= 3 &&
+            bytes[0] == 0xFF &&
+            bytes[1] == 0xD8 &&
+            bytes[2] == 0xFF) {
           mimeType = 'image/jpeg';
-        } else if (bytes.length >= 4 && bytes[0] == 0x89 && bytes[1] == 0x50 && bytes[2] == 0x4E && bytes[3] == 0x47) {
+        } else if (bytes.length >= 4 &&
+            bytes[0] == 0x89 &&
+            bytes[1] == 0x50 &&
+            bytes[2] == 0x4E &&
+            bytes[3] == 0x47) {
           mimeType = 'image/png';
-        } else if (bytes.length >= 4 && bytes[0] == 0x52 && bytes[1] == 0x49 && bytes[2] == 0x46 && bytes[3] == 0x46) {
+        } else if (bytes.length >= 4 &&
+            bytes[0] == 0x52 &&
+            bytes[1] == 0x49 &&
+            bytes[2] == 0x46 &&
+            bytes[3] == 0x46) {
           mimeType = 'image/webp';
         }
         return 'data:$mimeType;base64,$base64String';
@@ -876,7 +916,8 @@ class _SeedanceWebScreenState extends State<SeedanceWebScreen> {
     setState(() => _statusMessage = '正在上传图片到 seedance.io...');
     final base64Only = base64Data.split(',').last;
     String mimeType = 'image/png';
-    if (base64Data.startsWith('data:image/jpeg')) mimeType = 'image/jpeg';
+    if (base64Data.startsWith('data:image/jpeg'))
+      mimeType = 'image/jpeg';
     else if (base64Data.startsWith('data:image/webp')) mimeType = 'image/webp';
 
     const injectScript = '''
@@ -1041,7 +1082,8 @@ class _SeedanceWebScreenState extends State<SeedanceWebScreen> {
 
     final base64Only = base64Data.split(',').last;
     String mimeType = 'image/png';
-    if (base64Data.startsWith('data:image/jpeg')) mimeType = 'image/jpeg';
+    if (base64Data.startsWith('data:image/jpeg'))
+      mimeType = 'image/jpeg';
     else if (base64Data.startsWith('data:image/webp')) mimeType = 'image/webp';
 
     const injectScript = '''
@@ -1337,7 +1379,10 @@ class _SeedanceWebScreenState extends State<SeedanceWebScreen> {
     try {
       final result = await _controller.executeScript(extractScript);
       final url = result as String?;
-      if (url != null && url.isNotEmpty && !url.startsWith('no_') && !url.startsWith('{')) {
+      if (url != null &&
+          url.isNotEmpty &&
+          !url.startsWith('no_') &&
+          !url.startsWith('{')) {
         return url;
       }
       return null;
@@ -1396,18 +1441,30 @@ class _SeedanceWebScreenState extends State<SeedanceWebScreen> {
   bool _isValidVideoUrl(String url) {
     final lower = url.toLowerCase();
     final blocked = [
-      'sharethis.com', 'addthis.com', 'addtoany.com', 'shareaholic.com',
-      'pinterest.com/pin', 'twitter.com/intent', 'facebook.com/sharer',
-      'linkedin.com/share', 'reddit.com/submit', 'wa.me', 't.me/share',
+      'sharethis.com',
+      'addthis.com',
+      'addtoany.com',
+      'shareaholic.com',
+      'pinterest.com/pin',
+      'twitter.com/intent',
+      'facebook.com/sharer',
+      'linkedin.com/share',
+      'reddit.com/submit',
+      'wa.me',
+      't.me/share',
     ];
     for (final b in blocked) {
       if (lower.contains(b)) return false;
     }
-    return lower.contains('mp4') || lower.contains('webm') ||
-           lower.contains('.mov') || lower.contains('video') ||
-           lower.contains('download') || lower.contains('result') ||
-           lower.contains('tos-') || lower.contains('cdn') ||
-           lower.contains('blob:');
+    return lower.contains('mp4') ||
+        lower.contains('webm') ||
+        lower.contains('.mov') ||
+        lower.contains('video') ||
+        lower.contains('download') ||
+        lower.contains('result') ||
+        lower.contains('tos-') ||
+        lower.contains('cdn') ||
+        lower.contains('blob:');
   }
 
   /// Check if a video has been generated on the current page.
@@ -1613,7 +1670,8 @@ class _SeedanceWebScreenState extends State<SeedanceWebScreen> {
       // Check if video URL is available
       final videoUrl = await _checkVideoGenerated();
       if (videoUrl != null && _isValidVideoUrl(videoUrl)) {
-        setState(() => _statusMessage = '视频生成完成！URL: ${videoUrl.substring(0, videoUrl.length > 50 ? 50 : videoUrl.length)}...');
+        setState(() => _statusMessage =
+            '视频生成完成！URL: ${videoUrl.substring(0, videoUrl.length > 50 ? 50 : videoUrl.length)}...');
         return videoUrl;
       }
 
@@ -1625,19 +1683,23 @@ class _SeedanceWebScreenState extends State<SeedanceWebScreen> {
 
       // Update status with debug info
       setState(() {
-        _statusMessage = '等待视频... ${elapsed ~/ 60}分${elapsed % 60}秒 | 生成中: $stillGenerating | $debugInfo';
+        _statusMessage =
+            '等待视频... ${elapsed ~/ 60}分${elapsed % 60}秒 | 生成中: $stillGenerating | $debugInfo';
       });
 
       // Detect page navigation (URL change indicates we may be on a result page)
       final currentUrl = _currentUrl;
-      if (previousUrl != null && currentUrl != previousUrl && currentUrl.isNotEmpty) {
+      if (previousUrl != null &&
+          currentUrl != previousUrl &&
+          currentUrl.isNotEmpty) {
         // Page navigated - wait a moment for result page to load, then extract
         await Future.delayed(const Duration(seconds: 5));
 
         // Try deep extraction first (blob URLs, JS variables, etc.)
         final deepUrl = await _deepExtractVideoUrl();
         if (deepUrl != null && _isValidVideoUrl(deepUrl)) {
-          setState(() => _statusMessage = '视频生成完成！URL: ${deepUrl.substring(0, deepUrl.length > 50 ? 50 : deepUrl.length)}...');
+          setState(() => _statusMessage =
+              '视频生成完成！URL: ${deepUrl.substring(0, deepUrl.length > 50 ? 50 : deepUrl.length)}...');
           return deepUrl;
         }
 
@@ -1650,9 +1712,12 @@ class _SeedanceWebScreenState extends State<SeedanceWebScreen> {
             currentUrl.contains('/seedream-example') ||
             currentUrl.contains('/example/') ||
             currentUrl.contains('/demo/');
-        if (currentUrl.contains('seedance.io') && !isDemoOrLanding &&
-            currentUrl.length > 30 && _isValidVideoUrl(currentUrl)) {
-          setState(() => _statusMessage = '检测到结果页面，保存页面URL: ${currentUrl.substring(0, currentUrl.length > 50 ? 50 : currentUrl.length)}...');
+        if (currentUrl.contains('seedance.io') &&
+            !isDemoOrLanding &&
+            currentUrl.length > 30 &&
+            _isValidVideoUrl(currentUrl)) {
+          setState(() => _statusMessage =
+              '检测到结果页面，保存页面URL: ${currentUrl.substring(0, currentUrl.length > 50 ? 50 : currentUrl.length)}...');
           return currentUrl;
         }
       }
@@ -1668,7 +1733,8 @@ class _SeedanceWebScreenState extends State<SeedanceWebScreen> {
       await Future.delayed(const Duration(seconds: 10));
     }
 
-    setState(() => _statusMessage = '视频生成超时（${timeoutMinutes}分钟，共${pollCount}次检测）');
+    setState(
+        () => _statusMessage = '视频生成超时（${timeoutMinutes}分钟，共${pollCount}次检测）');
     return null;
   }
 
@@ -1729,7 +1795,8 @@ class _SeedanceWebScreenState extends State<SeedanceWebScreen> {
     final item = widget.batchStoryboards![index];
     setState(() {
       _allowOffEntryNavigation = false;
-      _statusMessage = '正在处理镜头 ${item.sceneNum}-${item.shotNum}: ${item.description}...';
+      _statusMessage =
+          '正在处理镜头 ${item.sceneNum}-${item.shotNum}: ${item.description}...';
     });
 
     // Step 1: Navigate to Seedance 2.0 entry page
@@ -1786,7 +1853,8 @@ class _SeedanceWebScreenState extends State<SeedanceWebScreen> {
     }
 
     // Step 4: Upload reference images (characters/props/scenes)
-    if (item.referenceImageUrls != null && item.referenceImageUrls!.isNotEmpty) {
+    if (item.referenceImageUrls != null &&
+        item.referenceImageUrls!.isNotEmpty) {
       setState(() => _statusMessage = '正在上传参考角色/道具/场景图片...');
       int uploadedCount = 0;
       for (final refUrl in item.referenceImageUrls!) {
@@ -1799,7 +1867,8 @@ class _SeedanceWebScreenState extends State<SeedanceWebScreen> {
 
     // Step 5: Upload first frame image (main reference)
     if (item.imageUrl != null && item.imageUrl!.isNotEmpty) {
-      setState(() => _statusMessage = '正在上传首帧图（镜头 ${item.sceneNum}-${item.shotNum}）...');
+      setState(() =>
+          _statusMessage = '正在上传首帧图（镜头 ${item.sceneNum}-${item.shotNum}）...');
       await _injectImageToSeedance(item.imageUrl!);
       await Future.delayed(const Duration(seconds: 3));
     }
@@ -1874,7 +1943,9 @@ class _SeedanceWebScreenState extends State<SeedanceWebScreen> {
           currentPage.contains('/zh/image-to-video') ||
           currentPage.contains('/example/') ||
           currentPage.contains('/demo/');
-      if (!isDemo && currentPage.contains('seedance.io') && currentPage.length > 20) {
+      if (!isDemo &&
+          currentPage.contains('seedance.io') &&
+          currentPage.length > 20) {
         videoUrl = currentPage;
       }
     }
@@ -1884,7 +1955,8 @@ class _SeedanceWebScreenState extends State<SeedanceWebScreen> {
     });
 
     if (videoUrl != null) {
-      _batchResults[widget.batchStoryboards![_interactiveCurrentIndex].storyboardId] = videoUrl;
+      _batchResults[widget
+          .batchStoryboards![_interactiveCurrentIndex].storyboardId] = videoUrl;
       await _saveBatchState();
 
       final nextIndex = _interactiveCurrentIndex + 1;
@@ -1960,7 +2032,8 @@ class _SeedanceWebScreenState extends State<SeedanceWebScreen> {
   Future<String?> _processSingleStoryboard(SeedanceStoryboardItem item) async {
     setState(() {
       _allowOffEntryNavigation = false;
-      _statusMessage = '正在处理镜头 ${item.sceneNum}-${item.shotNum}: ${item.description}...';
+      _statusMessage =
+          '正在处理镜头 ${item.sceneNum}-${item.shotNum}: ${item.description}...';
     });
 
     // Reset to the canonical Seedance 2 entry page before each automation run.
@@ -1977,7 +2050,8 @@ class _SeedanceWebScreenState extends State<SeedanceWebScreen> {
     await Future.delayed(const Duration(seconds: 1));
 
     // 3. Upload additional reference images (characters/props/scenes) FIRST
-    if (item.referenceImageUrls != null && item.referenceImageUrls!.isNotEmpty) {
+    if (item.referenceImageUrls != null &&
+        item.referenceImageUrls!.isNotEmpty) {
       setState(() => _statusMessage = '正在上传参考角色/道具/场景图片...');
       int uploadedCount = 0;
       for (final refUrl in item.referenceImageUrls!) {
@@ -1990,7 +2064,8 @@ class _SeedanceWebScreenState extends State<SeedanceWebScreen> {
 
     // 4. Upload first frame image (main reference)
     if (item.imageUrl != null && item.imageUrl!.isNotEmpty) {
-      setState(() => _statusMessage = '正在上传首帧图（镜头 ${item.sceneNum}-${item.shotNum}）...');
+      setState(() =>
+          _statusMessage = '正在上传首帧图（镜头 ${item.sceneNum}-${item.shotNum}）...');
       await _injectImageToSeedance(item.imageUrl!);
       await Future.delayed(const Duration(seconds: 3));
     }
@@ -2011,7 +2086,8 @@ class _SeedanceWebScreenState extends State<SeedanceWebScreen> {
     await Future.delayed(const Duration(seconds: 3));
 
     // 7. Wait for video to finish (stay on page, don't navigate away)
-    setState(() => _statusMessage = '等待视频生成完成（镜头 ${item.sceneNum}-${item.shotNum}，可能需要2-5分钟）...');
+    setState(() => _statusMessage =
+        '等待视频生成完成（镜头 ${item.sceneNum}-${item.shotNum}，可能需要2-5分钟）...');
     String? videoUrl = await _waitForVideoGeneration(timeoutMinutes: 8);
 
     // Fallback: if no direct URL, check if page navigated to result
@@ -2030,7 +2106,8 @@ class _SeedanceWebScreenState extends State<SeedanceWebScreen> {
           setState(() => _statusMessage = '视频生成完成，保存结果页面...');
           videoUrl = currentPage;
         } else {
-          debugPrint('Page is demo/landing or not a valid video URL: $currentPage');
+          debugPrint(
+              'Page is demo/landing or not a valid video URL: $currentPage');
         }
       }
     }
@@ -2068,7 +2145,8 @@ class _SeedanceWebScreenState extends State<SeedanceWebScreen> {
 
     if (mounted) {
       setState(() {
-        _statusMessage = '无法进入 Seedance 2 页面，当前页面: ${_currentUrl.isEmpty ? 'unknown' : _currentUrl}';
+        _statusMessage =
+            '无法进入 Seedance 2 页面，当前页面: ${_currentUrl.isEmpty ? 'unknown' : _currentUrl}';
       });
     }
     return false;
@@ -2137,7 +2215,8 @@ class _SeedanceWebScreenState extends State<SeedanceWebScreen> {
       final item = widget.batchStoryboards![i];
       setState(() {
         _batchCurrentIndex = i;
-        _statusMessage = '[${i + 1}/${widget.batchStoryboards!.length}] 处理镜头 ${item.sceneNum}-${item.shotNum}: ${item.description}';
+        _statusMessage =
+            '[${i + 1}/${widget.batchStoryboards!.length}] 处理镜头 ${item.sceneNum}-${item.shotNum}: ${item.description}';
       });
 
       try {
@@ -2146,12 +2225,14 @@ class _SeedanceWebScreenState extends State<SeedanceWebScreen> {
         if (videoUrl != null) {
           _batchResults[item.storyboardId] = videoUrl;
           setState(() {
-            _statusMessage = '[${i + 1}/${widget.batchStoryboards!.length}] ✓ 视频生成完成';
+            _statusMessage =
+                '[${i + 1}/${widget.batchStoryboards!.length}] ✓ 视频生成完成';
           });
         } else {
           _batchErrors[item.storyboardId] = '视频生成超时或失败';
           setState(() {
-            _statusMessage = '[${i + 1}/${widget.batchStoryboards!.length}] ✗ 视频生成失败';
+            _statusMessage =
+                '[${i + 1}/${widget.batchStoryboards!.length}] ✗ 视频生成失败';
           });
         }
 
@@ -2168,7 +2249,8 @@ class _SeedanceWebScreenState extends State<SeedanceWebScreen> {
       } catch (e) {
         _batchErrors[item.storyboardId] = e.toString();
         setState(() {
-          _statusMessage = '[${i + 1}/${widget.batchStoryboards!.length}] ✗ 错误: $e';
+          _statusMessage =
+              '[${i + 1}/${widget.batchStoryboards!.length}] ✗ 错误: $e';
         });
         await _saveBatchState();
 
@@ -2184,7 +2266,8 @@ class _SeedanceWebScreenState extends State<SeedanceWebScreen> {
     setState(() {
       _batchRunning = false;
       _batchComplete = true;
-      _statusMessage = '批量生成完成！成功: ${_batchResults.length}, 失败: ${_batchErrors.length}';
+      _statusMessage =
+          '批量生成完成！成功: ${_batchResults.length}, 失败: ${_batchErrors.length}';
     });
     await _saveBatchState();
   }
@@ -2288,7 +2371,9 @@ class _SeedanceWebScreenState extends State<SeedanceWebScreen> {
           _hasSavedState = true;
         });
         _showSaveToast('已恢复上次完成的批量结果');
-      } else if (wasRunning || _batchResults.isNotEmpty || _batchErrors.isNotEmpty) {
+      } else if (wasRunning ||
+          _batchResults.isNotEmpty ||
+          _batchErrors.isNotEmpty) {
         // Partially done - offer to resume
         final completedCount = _batchResults.length;
         final failedCount = _batchErrors.length;
@@ -2341,7 +2426,8 @@ class _SeedanceWebScreenState extends State<SeedanceWebScreen> {
     setState(() {
       _batchRunning = true;
       _batchComplete = false;
-      _statusMessage = '继续批量生成，从镜头 ${widget.batchStoryboards![startIndex].sceneNum}-${widget.batchStoryboards![startIndex].shotNum} 开始...';
+      _statusMessage =
+          '继续批量生成，从镜头 ${widget.batchStoryboards![startIndex].sceneNum}-${widget.batchStoryboards![startIndex].shotNum} 开始...';
     });
 
     // Switch to I2V tab
@@ -2360,7 +2446,8 @@ class _SeedanceWebScreenState extends State<SeedanceWebScreen> {
 
       setState(() {
         _batchCurrentIndex = i;
-        _statusMessage = '[${i + 1}/${widget.batchStoryboards!.length}] 处理镜头 ${item.sceneNum}-${item.shotNum}: ${item.description}';
+        _statusMessage =
+            '[${i + 1}/${widget.batchStoryboards!.length}] 处理镜头 ${item.sceneNum}-${item.shotNum}: ${item.description}';
       });
 
       try {
@@ -2369,12 +2456,14 @@ class _SeedanceWebScreenState extends State<SeedanceWebScreen> {
         if (videoUrl != null) {
           _batchResults[item.storyboardId] = videoUrl;
           setState(() {
-            _statusMessage = '[${i + 1}/${widget.batchStoryboards!.length}] ✓ 视频生成完成';
+            _statusMessage =
+                '[${i + 1}/${widget.batchStoryboards!.length}] ✓ 视频生成完成';
           });
         } else {
           _batchErrors[item.storyboardId] = '视频生成超时或失败';
           setState(() {
-            _statusMessage = '[${i + 1}/${widget.batchStoryboards!.length}] ✗ 视频生成失败';
+            _statusMessage =
+                '[${i + 1}/${widget.batchStoryboards!.length}] ✗ 视频生成失败';
           });
         }
 
@@ -2391,7 +2480,8 @@ class _SeedanceWebScreenState extends State<SeedanceWebScreen> {
       } catch (e) {
         _batchErrors[item.storyboardId] = e.toString();
         setState(() {
-          _statusMessage = '[${i + 1}/${widget.batchStoryboards!.length}] ✗ 错误: $e';
+          _statusMessage =
+              '[${i + 1}/${widget.batchStoryboards!.length}] ✗ 错误: $e';
         });
         await _saveBatchState();
 
@@ -2407,7 +2497,8 @@ class _SeedanceWebScreenState extends State<SeedanceWebScreen> {
     setState(() {
       _batchRunning = false;
       _batchComplete = true;
-      _statusMessage = '批量生成完成！成功: ${_batchResults.length}, 失败: ${_batchErrors.length}';
+      _statusMessage =
+          '批量生成完成！成功: ${_batchResults.length}, 失败: ${_batchErrors.length}';
     });
     await _saveBatchState();
   }
@@ -2467,8 +2558,13 @@ class _SeedanceWebScreenState extends State<SeedanceWebScreen> {
   }
 
   Future<void> _reload() async => await _controller.reload();
-  Future<void> _goBack() async { if (_canGoBack) await _controller.goBack(); }
-  Future<void> _goForward() async { if (_canGoForward) await _controller.goForward(); }
+  Future<void> _goBack() async {
+    if (_canGoBack) await _controller.goBack();
+  }
+
+  Future<void> _goForward() async {
+    if (_canGoForward) await _controller.goForward();
+  }
 
   Future<void> _manualInjectImage() async {
     final url = widget.initialImageUrl;
@@ -2497,8 +2593,10 @@ class _SeedanceWebScreenState extends State<SeedanceWebScreen> {
       await Future.delayed(const Duration(seconds: 15));
       if (!mounted) return;
       final currentUrl = _currentUrl;
-      if (currentUrl.contains('/result') || currentUrl.contains('/video') ||
-          (currentUrl.contains('seedance.io') && !currentUrl.contains('/seedance-2'))) {
+      if (currentUrl.contains('/result') ||
+          currentUrl.contains('/video') ||
+          (currentUrl.contains('seedance.io') &&
+              !currentUrl.contains('/seedance-2'))) {
         setState(() => _statusMessage = '检测到页面变化，尝试提取视频...');
         await _extractVideo();
         break;
@@ -2516,9 +2614,11 @@ class _SeedanceWebScreenState extends State<SeedanceWebScreen> {
         context: context,
         builder: (ctx) => AlertDialog(
           title: const Text('视频链接'),
-          content: SelectableText(_extractedVideoUrl!, style: const TextStyle(fontSize: 12)),
+          content: SelectableText(_extractedVideoUrl!,
+              style: const TextStyle(fontSize: 12)),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('关闭')),
+            TextButton(
+                onPressed: () => Navigator.pop(ctx), child: const Text('关闭')),
           ],
         ),
       );
@@ -2620,10 +2720,13 @@ class _SeedanceWebScreenState extends State<SeedanceWebScreen> {
             width: double.maxFinite,
             child: SingleChildScrollView(
               child: SelectableText(result?.toString() ?? 'null',
-                style: const TextStyle(fontSize: 9, fontFamily: 'monospace')),
+                  style: const TextStyle(fontSize: 9, fontFamily: 'monospace')),
             ),
           ),
-          actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('关闭'))],
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx), child: const Text('关闭'))
+          ],
         ),
       );
     } catch (e) {
@@ -2639,17 +2742,23 @@ class _SeedanceWebScreenState extends State<SeedanceWebScreen> {
   Widget build(BuildContext context) {
     final isBatch = widget.isBatchMode;
     final totalItems = isBatch ? widget.batchStoryboards!.length : 1;
+    final titleText = isBatch
+        ? (totalItems == 1
+            ? '镜头 ${widget.batchStoryboards!.first.sceneNum}-${widget.batchStoryboards!.first.shotNum}'
+            : 'Seedance 批量生成')
+        : 'Seedance 浏览器';
 
     return Scaffold(
       appBar: AppBar(
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(isBatch ? 'Seedance 批量生成' : 'Seedance 浏览器'),
+            Text(titleText),
             if (_statusMessage.isNotEmpty)
               Text(_statusMessage,
-                style: const TextStyle(fontSize: 10, color: Colors.grey),
-                maxLines: 1, overflow: TextOverflow.ellipsis),
+                  style: const TextStyle(fontSize: 10, color: Colors.grey),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis),
           ],
         ),
         leading: Row(
@@ -2673,8 +2782,14 @@ class _SeedanceWebScreenState extends State<SeedanceWebScreen> {
           ],
         ),
         actions: [
-          IconButton(icon: const Icon(Icons.arrow_forward), onPressed: _canGoForward ? _goForward : null, tooltip: '前进'),
-          IconButton(icon: const Icon(Icons.refresh), onPressed: _reload, tooltip: '刷新'),
+          IconButton(
+              icon: const Icon(Icons.arrow_forward),
+              onPressed: _canGoForward ? _goForward : null,
+              tooltip: '前进'),
+          IconButton(
+              icon: const Icon(Icons.refresh),
+              onPressed: _reload,
+              tooltip: '刷新'),
         ],
       ),
       body: Column(
@@ -2689,12 +2804,19 @@ class _SeedanceWebScreenState extends State<SeedanceWebScreen> {
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    _currentUrl.isNotEmpty ? _currentUrl : AppConfig.seedanceUrl,
+                    _currentUrl.isNotEmpty
+                        ? _currentUrl
+                        : AppConfig.seedanceUrl,
                     style: const TextStyle(fontSize: 12, color: Colors.grey),
-                    maxLines: 1, overflow: TextOverflow.ellipsis,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                   ),
                 ),
-                if (_loading) const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)),
+                if (_loading)
+                  const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2)),
               ],
             ),
           ),
@@ -2711,26 +2833,37 @@ class _SeedanceWebScreenState extends State<SeedanceWebScreen> {
                     children: [
                       Text(
                         '批量生成进度: ${_batchResults.length} 成功 / ${_batchErrors.length} 失败 / ${totalItems} 总计',
-                        style: const TextStyle(fontSize: 12, color: Colors.white),
+                        style:
+                            const TextStyle(fontSize: 12, color: Colors.white),
                       ),
                       const Spacer(),
                       // Mode toggle
                       if (!_batchRunning && !_interactiveGenerating)
                         TextButton.icon(
-                          onPressed: () => setState(() => _interactiveMode = !_interactiveMode),
-                          icon: Icon(_interactiveMode ? Icons.person : Icons.play_circle, size: 14),
-                          label: Text(_interactiveMode ? '逐个审阅模式' : '全自动模式', style: const TextStyle(fontSize: 11)),
-                          style: TextButton.styleFrom(foregroundColor: Colors.cyan, padding: EdgeInsets.zero),
+                          onPressed: () => setState(
+                              () => _interactiveMode = !_interactiveMode),
+                          icon: Icon(
+                              _interactiveMode
+                                  ? Icons.person
+                                  : Icons.play_circle,
+                              size: 14),
+                          label: Text(_interactiveMode ? '逐个审阅模式' : '全自动模式',
+                              style: const TextStyle(fontSize: 11)),
+                          style: TextButton.styleFrom(
+                              foregroundColor: Colors.cyan,
+                              padding: EdgeInsets.zero),
                         ),
                       if (_batchRunning)
                         FilledButton.icon(
                           onPressed: _stopBatchGeneration,
                           icon: const Icon(Icons.stop, size: 14),
-                          label: const Text('停止', style: TextStyle(fontSize: 11)),
+                          label:
+                              const Text('停止', style: TextStyle(fontSize: 11)),
                           style: FilledButton.styleFrom(
                             visualDensity: VisualDensity.compact,
                             backgroundColor: Colors.red,
-                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 8, vertical: 4),
                           ),
                         ),
                     ],
@@ -2742,7 +2875,10 @@ class _SeedanceWebScreenState extends State<SeedanceWebScreen> {
                     ),
                   // Interactive mode review controls
                   // Interactive mode: filled and waiting for manual generation
-                  if (_interactiveMode && !_interactiveGenerating && _interactiveVideoUrl == null && _batchCurrentIndex < totalItems) ...[
+                  if (_interactiveMode &&
+                      !_interactiveGenerating &&
+                      _interactiveVideoUrl == null &&
+                      _batchCurrentIndex < totalItems) ...[
                     const SizedBox(height: 6),
                     Row(
                       children: [
@@ -2750,12 +2886,15 @@ class _SeedanceWebScreenState extends State<SeedanceWebScreen> {
                           child: FilledButton.icon(
                             onPressed: _extractAndApproveVideo,
                             icon: const Icon(Icons.play_arrow, size: 14),
-                            label: const Text('视频已生成，提取并继续', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                            label: const Text('视频已生成，提取并继续',
+                                style: TextStyle(
+                                    fontSize: 12, fontWeight: FontWeight.bold)),
                             style: FilledButton.styleFrom(
                               visualDensity: VisualDensity.compact,
                               backgroundColor: Colors.cyan,
                               foregroundColor: Colors.black,
-                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 8, vertical: 6),
                             ),
                           ),
                         ),
@@ -2763,7 +2902,9 @@ class _SeedanceWebScreenState extends State<SeedanceWebScreen> {
                     ),
                   ],
                   // Interactive mode: video extracted, awaiting approval
-                  if (_interactiveMode && _interactiveVideoUrl != null && !_interactiveGenerating) ...[
+                  if (_interactiveMode &&
+                      _interactiveVideoUrl != null &&
+                      !_interactiveGenerating) ...[
                     const SizedBox(height: 6),
                     Row(
                       children: [
@@ -2771,75 +2912,184 @@ class _SeedanceWebScreenState extends State<SeedanceWebScreen> {
                           child: OutlinedButton.icon(
                             onPressed: _regenerateCurrentStoryboard,
                             icon: const Icon(Icons.refresh, size: 14),
-                            label: const Text('重新生成', style: TextStyle(fontSize: 11)),
+                            label: const Text('重新生成',
+                                style: TextStyle(fontSize: 11)),
                             style: OutlinedButton.styleFrom(
                               visualDensity: VisualDensity.compact,
                               foregroundColor: Colors.orange,
                               side: const BorderSide(color: Colors.orange),
-                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 8, vertical: 4),
                             ),
                           ),
                         ),
                         const SizedBox(width: 8),
                         Expanded(
                           child: FilledButton.icon(
-                            onPressed: _interactiveVideoUrl != null ? _approveAndNext : null,
+                            onPressed: _interactiveVideoUrl != null
+                                ? _approveAndNext
+                                : null,
                             icon: const Icon(Icons.check, size: 14),
-                            label: const Text('通过，下一个', style: TextStyle(fontSize: 11)),
+                            label: const Text('通过，下一个',
+                                style: TextStyle(fontSize: 11)),
                             style: FilledButton.styleFrom(
                               visualDensity: VisualDensity.compact,
                               backgroundColor: Colors.green,
-                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 8, vertical: 4),
                             ),
                           ),
                         ),
                       ],
                     ),
                   ],
-                  // Storyboard list (vertical scrollable, more compact)
+                  // Storyboard list (vertical scrollable)
                   if (isBatch && widget.batchStoryboards!.isNotEmpty)
                     SizedBox(
-                      height: 48,
+                      height: totalItems <= 2 ? totalItems * 60.0 : 120.0,
                       child: ListView.builder(
                         scrollDirection: Axis.vertical,
                         itemCount: widget.batchStoryboards!.length,
                         itemBuilder: (ctx, i) {
                           final item = widget.batchStoryboards![i];
-                          final hasResult = _batchResults.containsKey(item.storyboardId);
-                          final hasError = _batchErrors.containsKey(item.storyboardId);
-                          final isCurrentAuto = i == _batchCurrentIndex && _batchRunning;
-                          final isCurrentInteractive = _interactiveMode && i == _interactiveCurrentIndex && _batchCurrentIndex < totalItems;
+                          final hasResult =
+                              _batchResults.containsKey(item.storyboardId);
+                          final hasError =
+                              _batchErrors.containsKey(item.storyboardId);
+                          final isCurrentAuto =
+                              i == _batchCurrentIndex && _batchRunning;
+                          final isCurrentInteractive = _interactiveMode &&
+                              i == _interactiveCurrentIndex &&
+                              _batchCurrentIndex < totalItems;
 
                           return Container(
-                            height: 28,
-                            padding: const EdgeInsets.symmetric(horizontal: 6),
+                            constraints: const BoxConstraints(minHeight: 56),
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 8, vertical: 4),
                             decoration: BoxDecoration(
-                              color: isCurrentAuto || isCurrentInteractive ? Colors.orange.shade800 :
-                                     hasResult ? Colors.green.shade900 :
-                                     hasError ? Colors.red.shade900 : Colors.grey.shade700,
+                              color: isCurrentAuto || isCurrentInteractive
+                                  ? Colors.orange.shade800
+                                  : hasResult
+                                      ? Colors.green.shade900
+                                      : hasError
+                                          ? Colors.red.shade900
+                                          : Colors.grey.shade700,
                               borderRadius: BorderRadius.circular(3),
-                              border: (isCurrentAuto || isCurrentInteractive) ? Border.all(color: Colors.orange, width: 1) : null,
+                              border: (isCurrentAuto || isCurrentInteractive)
+                                  ? Border.all(color: Colors.orange, width: 1)
+                                  : null,
                             ),
                             child: Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Text(
-                                  '${item.sceneNum}-${item.shotNum}',
-                                  style: const TextStyle(fontSize: 14, color: Colors.white, fontWeight: FontWeight.bold),
-                                ),
-                                const SizedBox(width: 6),
+                                // Thumbnail
+                                if (item.imageUrl != null &&
+                                    item.imageUrl!.isNotEmpty)
+                                  ClipRRect(
+                                    borderRadius: BorderRadius.circular(4),
+                                    child: PersistentImage(
+                                      remoteUrl:
+                                          PersistentImageStore.isLocalPath(
+                                                  item.imageUrl!)
+                                              ? null
+                                              : item.imageUrl,
+                                      localPath:
+                                          PersistentImageStore.isLocalPath(
+                                                  item.imageUrl!)
+                                              ? item.imageUrl
+                                              : null,
+                                      width: 48,
+                                      height: 48,
+                                      fit: BoxFit.cover,
+                                      placeholder: Container(
+                                        width: 48,
+                                        height: 48,
+                                        color: Colors.grey.shade600,
+                                        child: const Icon(Icons.image,
+                                            size: 20, color: Colors.white54),
+                                      ),
+                                    ),
+                                  )
+                                else
+                                  Container(
+                                    width: 48,
+                                    height: 48,
+                                    decoration: BoxDecoration(
+                                      color: Colors.grey.shade600,
+                                      borderRadius: BorderRadius.circular(4),
+                                    ),
+                                    child: Center(
+                                      child: Text(
+                                          '${item.sceneNum}-${item.shotNum}',
+                                          style: const TextStyle(
+                                              fontSize: 11,
+                                              color: Colors.white70,
+                                              fontWeight: FontWeight.bold)),
+                                    ),
+                                  ),
+                                const SizedBox(width: 8),
+                                // Text info
                                 Expanded(
-                                  child: Text(
-                                    item.description,
-                                    style: const TextStyle(fontSize: 13, color: Colors.white),
-                                    maxLines: 1, overflow: TextOverflow.ellipsis,
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Row(
+                                        children: [
+                                          Text(
+                                            '${item.sceneNum}-${item.shotNum}',
+                                            style: const TextStyle(
+                                                fontSize: 14,
+                                                color: Colors.white,
+                                                fontWeight: FontWeight.bold),
+                                          ),
+                                          const SizedBox(width: 8),
+                                          if (hasResult)
+                                            const Text('✓',
+                                                style: TextStyle(
+                                                    fontSize: 14,
+                                                    color: Colors.greenAccent)),
+                                          if (hasError)
+                                            const Text('✗',
+                                                style: TextStyle(
+                                                    fontSize: 14,
+                                                    color: Colors.redAccent)),
+                                          if (isCurrentInteractive &&
+                                              _interactiveGenerating)
+                                            const Text('生成中',
+                                                style: TextStyle(
+                                                    fontSize: 12,
+                                                    color:
+                                                        Colors.orangeAccent)),
+                                          if (isCurrentInteractive &&
+                                              !_interactiveGenerating &&
+                                              _interactiveVideoUrl == null)
+                                            const Text('待确认',
+                                                style: TextStyle(
+                                                    fontSize: 12,
+                                                    color: Colors.cyan)),
+                                          const Spacer(),
+                                          if (item.referenceImageUrls != null &&
+                                              item.referenceImageUrls!
+                                                  .isNotEmpty)
+                                            Text(
+                                                '${item.referenceImageUrls!.length}张参考图',
+                                                style: const TextStyle(
+                                                    fontSize: 11,
+                                                    color: Colors.white54)),
+                                        ],
+                                      ),
+                                      Text(
+                                        item.description,
+                                        style: const TextStyle(
+                                            fontSize: 13,
+                                            color: Colors.white70),
+                                        maxLines: 2,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ],
                                   ),
                                 ),
-                                if (hasResult) const Text('✓', style: TextStyle(fontSize: 14, color: Colors.greenAccent)),
-                                if (hasError) const Text('✗', style: TextStyle(fontSize: 14, color: Colors.redAccent)),
-                                if (isCurrentInteractive && _interactiveGenerating)
-                                  const Text('生成中', style: TextStyle(fontSize: 12, color: Colors.orangeAccent)),
-                                if (isCurrentInteractive && !_interactiveGenerating && _interactiveVideoUrl == null)
-                                  const Text('待确认', style: TextStyle(fontSize: 12, color: Colors.cyan)),
                               ],
                             ),
                           );
@@ -2859,7 +3109,8 @@ class _SeedanceWebScreenState extends State<SeedanceWebScreen> {
               border: Border(bottom: BorderSide(color: Colors.grey.shade800)),
             ),
             child: Wrap(
-              spacing: 6, runSpacing: 4,
+              spacing: 6,
+              runSpacing: 4,
               children: [
                 // Tab switching (needed for image-to-video tab)
                 OutlinedButton.icon(
@@ -2870,25 +3121,34 @@ class _SeedanceWebScreenState extends State<SeedanceWebScreen> {
                     visualDensity: VisualDensity.compact,
                     foregroundColor: Colors.cyan,
                     side: const BorderSide(color: Colors.cyan),
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                   ),
                 ),
                 // Batch mode: start generation
-                if (isBatch && !_interactiveGenerating && _interactiveVideoUrl == null)
+                if (isBatch &&
+                    !_interactiveGenerating &&
+                    _interactiveVideoUrl == null)
                   FilledButton.icon(
                     onPressed: _batchRunning ? null : _startBatchGeneration,
-                    icon: Icon(_interactiveMode ? Icons.person : Icons.play_arrow, size: 14),
-                    label: Text(_interactiveMode ? '开始逐个生成' : '开始全自动', style: const TextStyle(fontSize: 11)),
+                    icon: Icon(
+                        _interactiveMode ? Icons.person : Icons.play_arrow,
+                        size: 14),
+                    label: Text(_interactiveMode ? '开始逐个生成' : '开始全自动',
+                        style: const TextStyle(fontSize: 11)),
                     style: FilledButton.styleFrom(
                       visualDensity: VisualDensity.compact,
-                      backgroundColor: _interactiveMode ? Colors.cyan : Colors.orange,
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                      backgroundColor:
+                          _interactiveMode ? Colors.cyan : Colors.orange,
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 10, vertical: 4),
                     ),
                   ),
                 // Interactive mode: show generating indicator
                 if (isBatch && _interactiveGenerating)
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                     decoration: BoxDecoration(
                       color: Colors.orange.shade800,
                       borderRadius: BorderRadius.circular(4),
@@ -2896,9 +3156,15 @@ class _SeedanceWebScreenState extends State<SeedanceWebScreen> {
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: const [
-                        SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)),
+                        SizedBox(
+                            width: 14,
+                            height: 14,
+                            child: CircularProgressIndicator(
+                                strokeWidth: 2, color: Colors.white)),
                         SizedBox(width: 8),
-                        Text('生成中...', style: TextStyle(fontSize: 11, color: Colors.white)),
+                        Text('生成中...',
+                            style:
+                                TextStyle(fontSize: 11, color: Colors.white)),
                       ],
                     ),
                   ),
@@ -2911,7 +3177,8 @@ class _SeedanceWebScreenState extends State<SeedanceWebScreen> {
                     style: FilledButton.styleFrom(
                       visualDensity: VisualDensity.compact,
                       backgroundColor: Colors.green,
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 10, vertical: 4),
                     ),
                   ),
                 // Video extraction
@@ -2922,7 +3189,8 @@ class _SeedanceWebScreenState extends State<SeedanceWebScreen> {
                   style: FilledButton.styleFrom(
                     visualDensity: VisualDensity.compact,
                     backgroundColor: Colors.green,
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                   ),
                 ),
               ],
@@ -2930,7 +3198,10 @@ class _SeedanceWebScreenState extends State<SeedanceWebScreen> {
           ),
 
           // Video preview for interactive mode (when video is generated and ready for review)
-          if (isBatch && _interactiveMode && _interactiveVideoUrl != null && !_interactiveGenerating)
+          if (isBatch &&
+              _interactiveMode &&
+              _interactiveVideoUrl != null &&
+              !_interactiveGenerating)
             Container(
               width: double.infinity,
               padding: const EdgeInsets.all(16),
@@ -2940,11 +3211,15 @@ class _SeedanceWebScreenState extends State<SeedanceWebScreen> {
                 children: [
                   Row(
                     children: [
-                      Icon(Icons.play_circle_filled, color: Colors.white, size: 24),
+                      Icon(Icons.play_circle_filled,
+                          color: Colors.white, size: 24),
                       const SizedBox(width: 8),
                       Text(
                         '视频已生成！点击下方按钮查看',
-                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
+                        style: const TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 16),
                       ),
                       const Spacer(),
                       FilledButton.icon(
@@ -2952,11 +3227,14 @@ class _SeedanceWebScreenState extends State<SeedanceWebScreen> {
                           _controller.loadUrl(_interactiveVideoUrl!);
                         },
                         icon: const Icon(Icons.play_arrow, size: 16),
-                        label: const Text('打开视频', style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold)),
+                        label: const Text('打开视频',
+                            style: TextStyle(
+                                fontSize: 14, fontWeight: FontWeight.bold)),
                         style: FilledButton.styleFrom(
                           backgroundColor: Colors.white,
                           foregroundColor: Colors.green.shade800,
-                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 16, vertical: 8),
                         ),
                       ),
                     ],
@@ -2981,9 +3259,13 @@ class _SeedanceWebScreenState extends State<SeedanceWebScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text('已提取视频链接:', style: TextStyle(color: Colors.green, fontWeight: FontWeight.bold)),
+                  const Text('已提取视频链接:',
+                      style: TextStyle(
+                          color: Colors.green, fontWeight: FontWeight.bold)),
                   const SizedBox(height: 4),
-                  SelectableText(_extractedVideoUrl!, style: const TextStyle(fontSize: 11, color: Colors.green)),
+                  SelectableText(_extractedVideoUrl!,
+                      style:
+                          const TextStyle(fontSize: 11, color: Colors.green)),
                 ],
               ),
             ),
@@ -2997,18 +3279,22 @@ class _SeedanceWebScreenState extends State<SeedanceWebScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text('批量生成结果:', style: TextStyle(color: Colors.green, fontWeight: FontWeight.bold)),
+                  const Text('批量生成结果:',
+                      style: TextStyle(
+                          color: Colors.green, fontWeight: FontWeight.bold)),
                   const SizedBox(height: 4),
                   ..._batchResults.entries.map((e) => Text(
-                    '✓ ${e.key}: ${e.value.length > 60 ? e.value.substring(0, 60) + '...' : e.value}',
-                    style: const TextStyle(fontSize: 10, color: Colors.greenAccent),
-                  )),
+                        '✓ ${e.key}: ${e.value.length > 60 ? e.value.substring(0, 60) + '...' : e.value}',
+                        style: const TextStyle(
+                            fontSize: 10, color: Colors.greenAccent),
+                      )),
                   if (_batchErrors.isNotEmpty) ...[
                     const SizedBox(height: 4),
                     ..._batchErrors.entries.map((e) => Text(
-                      '✗ ${e.key}: ${e.value}',
-                      style: const TextStyle(fontSize: 10, color: Colors.redAccent),
-                    )),
+                          '✗ ${e.key}: ${e.value}',
+                          style: const TextStyle(
+                              fontSize: 10, color: Colors.redAccent),
+                        )),
                   ],
                 ],
               ),
@@ -3027,7 +3313,8 @@ class _SeedanceWebScreenState extends State<SeedanceWebScreen> {
                       ],
                     ),
                   )
-                : Webview(_controller, permissionRequested: _onPermissionRequested),
+                : Webview(_controller,
+                    permissionRequested: _onPermissionRequested),
           ),
         ],
       ),
@@ -3035,8 +3322,11 @@ class _SeedanceWebScreenState extends State<SeedanceWebScreen> {
   }
 
   FutureOr<WebviewPermissionDecision> _onPermissionRequested(
-    String url, WebviewPermissionKind kind, bool isUserInitiated,
-  ) => WebviewPermissionDecision.allow;
+    String url,
+    WebviewPermissionKind kind,
+    bool isUserInitiated,
+  ) =>
+      WebviewPermissionDecision.allow;
 
   @override
   void dispose() {

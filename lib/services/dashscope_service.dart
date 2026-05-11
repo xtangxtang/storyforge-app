@@ -17,7 +17,8 @@ class DashscopeService {
   /// Uses wan2.7-image-pro with n=1.
   /// Consistency across shots relies on consistent prompt descriptions
   /// (character appearance, scene setting, style tags).
-  Future<String> generateImage(String prompt, {List<String>? referenceImageUrls}) async {
+  Future<String> generateImage(String prompt,
+      {List<String>? referenceImageUrls}) async {
     final apiKey = AppConfig.imageApiKey;
     final model = AppConfig.imageModel;
     final proxy = normalizeConfiguredProxy() ?? 'DIRECT';
@@ -83,13 +84,21 @@ class DashscopeService {
     } on TimeoutException {
       await AppLogger.error(
         'Image generation timed out',
-        data: {'tag': 'image.generate', 'endpoint': uri.toString(), 'proxy': proxy},
+        data: {
+          'tag': 'image.generate',
+          'endpoint': uri.toString(),
+          'proxy': proxy
+        },
       );
       throw Exception('图片生成超时（300 秒）。请检查网络或代理设置。');
     } on SocketException catch (e, st) {
       await AppLogger.error(
         'Image generation network failed',
-        data: {'tag': 'image.generate', 'endpoint': uri.toString(), 'proxy': proxy},
+        data: {
+          'tag': 'image.generate',
+          'endpoint': uri.toString(),
+          'proxy': proxy
+        },
         error: e,
         stackTrace: st,
       );
@@ -158,7 +167,10 @@ class DashscopeService {
         if (imageUrl != null && imageUrl.isNotEmpty) {
           await AppLogger.info(
             'Image generation sync completed',
-            data: {'tag': 'image.generate', 'imageUrl': imageUrl.substring(0, 60)},
+            data: {
+              'tag': 'image.generate',
+              'imageUrl': _previewText(imageUrl, 60)
+            },
           );
           return imageUrl;
         }
@@ -186,7 +198,9 @@ class DashscopeService {
       final headers = {'Authorization': 'Bearer $apiKey'};
       http.Response response;
       try {
-        response = await _client.get(uri, headers: headers).timeout(const Duration(seconds: 60));
+        response = await _client
+            .get(uri, headers: headers)
+            .timeout(const Duration(seconds: 60));
       } on TimeoutException {
         throw Exception('图片任务轮询超时');
       } on SocketException catch (e) {
@@ -284,7 +298,8 @@ class DashscopeService {
     required int duration,
     List<String>? referenceImageUrls,
   }) async {
-    final uri = Uri.parse('$baseUrl/api/v1/services/aigc/video-generation/video-synthesis');
+    final uri = Uri.parse(
+        '$baseUrl/api/v1/services/aigc/video-generation/video-synthesis');
     final headers = {
       'Content-Type': 'application/json',
       'Authorization': 'Bearer $apiKey',
@@ -369,7 +384,8 @@ class DashscopeService {
     required int duration,
     List<String>? referenceImageUrls,
   }) async {
-    final uri = Uri.parse('$baseUrl/api/v1/services/aigc/video-generation/video-synthesis');
+    final uri = Uri.parse(
+        '$baseUrl/api/v1/services/aigc/video-generation/video-synthesis');
     final headers = {
       'Content-Type': 'application/json',
       'Authorization': 'Bearer $apiKey',
@@ -411,9 +427,8 @@ class DashscopeService {
 
     http.Response response;
     try {
-      response = await _client
-          .post(uri, headers: headers, body: body)
-          .timeout(const Duration(seconds: 300)); // 5 minutes for sync video gen
+      response = await _client.post(uri, headers: headers, body: body).timeout(
+          const Duration(seconds: 300)); // 5 minutes for sync video gen
     } on TimeoutException {
       throw Exception('视频生成请求超时（300 秒）。请检查网络或代理设置。');
     } on SocketException catch (e) {
@@ -490,7 +505,9 @@ class DashscopeService {
       final headers = {'Authorization': 'Bearer $apiKey'};
       http.Response response;
       try {
-        response = await _client.get(uri, headers: headers).timeout(const Duration(seconds: 60));
+        response = await _client
+            .get(uri, headers: headers)
+            .timeout(const Duration(seconds: 60));
       } on TimeoutException {
         throw Exception('视频任务轮询超时');
       } on SocketException catch (e) {
@@ -547,8 +564,7 @@ class DashscopeService {
     final shotDescriptions = prompts.asMap().entries.map((e) {
       return '第${e.key + 1}张：${e.value}';
     }).join('；');
-    final combinedPrompt =
-        '电影感组图，按顺序生成以下分镜画面，角色外貌、服装、场景特征必须前后一致。'
+    final combinedPrompt = '电影感组图，按顺序生成以下分镜画面，角色外貌、服装、场景特征必须前后一致。'
         '$shotDescriptions';
 
     final uri = Uri.parse(
@@ -674,7 +690,8 @@ class DashscopeService {
     throw Exception('组图生成响应中没有图片 URL');
   }
 
-  Future<List<String>> _pollSequentialImageTask(String taskId, int expectedCount) async {
+  Future<List<String>> _pollSequentialImageTask(
+      String taskId, int expectedCount) async {
     final baseUrl = _resolveDashScopeBaseUrl(AppConfig.imageBaseUrl);
     final apiKey = AppConfig.imageApiKey;
 
@@ -684,7 +701,9 @@ class DashscopeService {
       final headers = {'Authorization': 'Bearer $apiKey'};
       http.Response response;
       try {
-        response = await _client.get(uri, headers: headers).timeout(const Duration(seconds: 60));
+        response = await _client
+            .get(uri, headers: headers)
+            .timeout(const Duration(seconds: 60));
       } on TimeoutException {
         throw Exception('组图任务轮询超时');
       } on SocketException catch (e) {
@@ -753,5 +772,10 @@ class DashscopeService {
       url = url.substring(0, url.length - 3);
     }
     return url;
+  }
+
+  static String _previewText(String value, int maxLength) {
+    if (value.length <= maxLength) return value;
+    return value.substring(0, maxLength);
   }
 }

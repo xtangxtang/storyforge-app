@@ -73,7 +73,9 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
 
     for (final asset in assets) {
       String? localPath = asset.referenceImageLocalPath;
-      if (localPath == null && asset.referenceImageUrl != null && asset.referenceImageUrl!.isNotEmpty) {
+      if (localPath == null &&
+          asset.referenceImageUrl != null &&
+          asset.referenceImageUrl!.isNotEmpty) {
         localPath = await imageStore.persistRemoteImage(
           asset.referenceImageUrl,
           category: 'assets',
@@ -201,7 +203,8 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
         imageUrls = [];
         for (int i = 0; i < prompts.length; i++) {
           if (!mounted) return;
-          setState(() => _genStatus = '正在生成镜头 ${_storyboards[i].sceneNum}-${_storyboards[i].shotNum} (${i + 1}/${prompts.length})...');
+          setState(() => _genStatus =
+              '正在生成镜头 ${_storyboards[i].sceneNum}-${_storyboards[i].shotNum} (${i + 1}/${prompts.length})...');
           final url = await dashscope.generateImage(prompts[i]);
           imageUrls.add(url);
         }
@@ -223,7 +226,8 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
       }).toList();
       for (int i = 0; i < prompts.length; i++) {
         if (!mounted) return;
-        setState(() => _genStatus = '正在生成镜头 ${_storyboards[i].sceneNum}-${_storyboards[i].shotNum} (${i + 1}/${prompts.length})...');
+        setState(() => _genStatus =
+            '正在生成镜头 ${_storyboards[i].sceneNum}-${_storyboards[i].shotNum} (${i + 1}/${prompts.length})...');
         try {
           final url = await dashscope.generateImage(prompts[i]);
           imageUrls.add(url);
@@ -290,7 +294,8 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
     setState(() {
       _currentImageUrl = _confirmedImages[_storyboards[0].id];
       _imageGenerating = false;
-      _genStatus = '镜头 ${_storyboards[0].sceneNum}-${_storyboards[0].shotNum} 首帧图已生成，请审阅（1/${_storyboards.length}）';
+      _genStatus =
+          '镜头 ${_storyboards[0].sceneNum}-${_storyboards[0].shotNum} 首帧图已生成，请审阅（1/${_storyboards.length}）';
     });
   }
 
@@ -311,7 +316,8 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
     try {
       final prompt = sb.firstFramePrompt ?? sb.description ?? '';
       final feedback = _retryFeedback[sb.id];
-      final finalPrompt = feedback != null ? '$prompt\n\n修改要求：$feedback' : prompt;
+      final finalPrompt =
+          feedback != null ? '$prompt\n\n修改要求：$feedback' : prompt;
 
       final imageUrl = await dashscope.generateImage(finalPrompt);
       final localPath = await PersistentImageStore().persistRemoteImage(
@@ -330,14 +336,17 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
       );
 
       if (!mounted) {
-        await AppLogger.info('Not mounted after generateImage', data: {'tag': 'ui.image'});
+        await AppLogger.info('Not mounted after generateImage',
+            data: {'tag': 'ui.image'});
         return;
       }
 
       // Update storyboard in DB
       try {
-        await StoryboardDao().updateImageUrl(sb.id, imageUrl, localPath: localPath);
-        await AppLogger.info('DB update completed', data: {'tag': 'ui.image', 'id': sb.id});
+        await StoryboardDao()
+            .updateImageUrl(sb.id, imageUrl, localPath: localPath);
+        await AppLogger.info('DB update completed',
+            data: {'tag': 'ui.image', 'id': sb.id});
       } catch (e, st) {
         await AppLogger.error(
           'DB update threw exception',
@@ -347,7 +356,8 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
       }
 
       if (!mounted) {
-        await AppLogger.info('Not mounted before setState', data: {'tag': 'ui.image'});
+        await AppLogger.info('Not mounted before setState',
+            data: {'tag': 'ui.image'});
         return;
       }
 
@@ -503,7 +513,8 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
         final sb = _storyboards[i];
         final imageUrl = _confirmedImages[sb.id] ?? sb.referenceImageUrl ?? '';
 
-        final clipId = 'clip_${DateTime.now().millisecondsSinceEpoch.toString().substring(6)}';
+        final clipId =
+            'clip_${DateTime.now().millisecondsSinceEpoch.toString().substring(6)}';
         final clip = VideoClip(
           id: clipId,
           projectId: widget.project.id,
@@ -513,7 +524,8 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
         );
         await VideoClipDao().insert(clip);
 
-        setState(() => _genStatus = '正在生成 ${sb.description?.substring(0, 15) ?? '...'} 的视频...');
+        setState(() => _genStatus =
+            '正在生成 ${_truncateText(sb.description ?? '...', 15)} 的视频...');
 
         try {
           final videoPrompt = sb.videoPrompt ?? '';
@@ -544,19 +556,186 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
     }
   }
 
-  /// Start batch video generation using Seedance web automation.
-  /// Opens a single SeedanceWebScreen with all storyboards for interactive processing.
-  Future<void> _startSeedanceBatchGeneration() async {
-    if (_storyboards.isEmpty) return;
+  /// Generate video for a single storyboard using Seedance web automation.
+  Future<void> _generateVideoForStoryboard(Storyboard sb) async {
+    final imageUrl = PersistentImageStore.preferredSource(
+          localPath: sb.referenceImageLocalPath,
+          remoteUrl: sb.referenceImageUrl,
+        ) ??
+        (sb.referenceImageUrls?.isNotEmpty == true
+            ? sb.referenceImageUrls!.first
+            : null);
+    if (imageUrl == null || imageUrl.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('该分镜缺少首帧图，请先生成首帧图。'),
+            duration: Duration(seconds: 3),
+          ),
+        );
+      }
+      return;
+    }
 
-    // Collect character + prop reference image URLs (shared across all storyboards)
+    // Collect character + scene + prop reference image URLs
     final refImageUrls = <String>[];
     for (final a in _assets) {
       final referenceSource = PersistentImageStore.preferredSource(
         localPath: a.referenceImageLocalPath,
         remoteUrl: a.referenceImageUrl,
       );
-      if ((a.type == 'character' || a.type == 'prop') &&
+      if ((a.type == 'character' ||
+              a.type == 'prop' ||
+              a.type == 'location' ||
+              a.type == 'scene') &&
+          referenceSource != null &&
+          referenceSource.isNotEmpty) {
+        refImageUrls.add(referenceSource);
+      }
+    }
+
+    final item = SeedanceStoryboardItem(
+      storyboardId: sb.id,
+      imageUrl: imageUrl,
+      prompt: sb.videoPrompt,
+      firstFramePrompt: sb.firstFramePrompt,
+      description: sb.description ?? '',
+      sceneNum: sb.sceneNum,
+      shotNum: sb.shotNum,
+      referenceImageUrls: refImageUrls.isNotEmpty ? refImageUrls : null,
+    );
+
+    final result = await Navigator.push<Map<String, String>>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => SeedanceWebScreen(batchStoryboards: [item]),
+      ),
+    );
+
+    // Handle result: save video clip if generated
+    if (result != null && result.containsKey(sb.id)) {
+      final videoUrl = result[sb.id]!;
+      await _saveSeedanceVideoClip(sb.id, videoUrl);
+      if (mounted) _loadData();
+    }
+  }
+
+  /// Generate video for a single storyboard through the configured DashScope API.
+  Future<void> _generateApiVideoForStoryboard(Storyboard sb) async {
+    final imageUrl = _remoteStoryboardImageUrl(sb);
+    if (imageUrl == null || imageUrl.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('该分镜缺少可供 API 访问的首帧图，请先生成首帧图。'),
+            duration: Duration(seconds: 3),
+          ),
+        );
+      }
+      return;
+    }
+
+    final refImageUrls = _assets
+        .map((a) => a.referenceImageUrl)
+        .whereType<String>()
+        .where((url) => url.isNotEmpty)
+        .toList();
+
+    final clipId = 'clip_${sb.id}_${DateTime.now().millisecondsSinceEpoch}';
+    await VideoClipDao().insert(
+      VideoClip(
+        id: clipId,
+        projectId: widget.project.id,
+        storyboardId: sb.id,
+        state: 'generating',
+        createdAt: DateTime.now().millisecondsSinceEpoch,
+      ),
+    );
+
+    setState(() {
+      _generating = true;
+      _genStatus = '正在生成镜头 ${sb.sceneNum}-${sb.shotNum} 视频...';
+    });
+
+    try {
+      final videoUrl = await DashscopeService().generateVideo(
+        prompt: sb.videoPrompt ?? '',
+        firstFrameUrl: imageUrl,
+        duration: sb.duration ?? 5,
+        referenceImageUrls: refImageUrls.isNotEmpty ? refImageUrls : null,
+      );
+      await VideoClipDao().update(clipId, {
+        'video_url': videoUrl,
+        'state': 'completed',
+      });
+    } catch (e) {
+      await VideoClipDao().update(clipId, {
+        'state': 'failed',
+        'error_reason': e.toString(),
+      });
+    } finally {
+      if (mounted) {
+        setState(() => _generating = false);
+        await _loadData();
+      }
+    }
+  }
+
+  String? _remoteStoryboardImageUrl(Storyboard sb) {
+    final primary = sb.referenceImageUrl;
+    if (primary != null &&
+        primary.isNotEmpty &&
+        !PersistentImageStore.isLocalPath(primary)) {
+      return primary;
+    }
+    final urls = sb.referenceImageUrls ?? const [];
+    for (final url in urls) {
+      if (url.isNotEmpty && !PersistentImageStore.isLocalPath(url)) {
+        return url;
+      }
+    }
+    return null;
+  }
+
+  /// Save a single Seedance video clip to the database.
+  Future<void> _saveSeedanceVideoClip(
+      String storyboardId, String videoUrl) async {
+    final clipId =
+        'clip_seedance_${DateTime.now().millisecondsSinceEpoch.toString().substring(6)}_$storyboardId';
+    try {
+      final clip = VideoClip(
+        id: clipId,
+        projectId: widget.project.id,
+        storyboardId: storyboardId,
+        videoUrl: videoUrl,
+        state: 'completed',
+        createdAt: DateTime.now().millisecondsSinceEpoch,
+      );
+      await VideoClipDao().insert(clip);
+    } catch (e) {
+      await AppLogger.warn(
+        'Failed to save Seedance video clip',
+        data: {'storyboard_id': storyboardId, 'error': e.toString()},
+      );
+    }
+  }
+
+  /// Start batch video generation using Seedance web automation.
+  /// Opens a single SeedanceWebScreen with all storyboards for interactive processing.
+  Future<void> _startSeedanceBatchGeneration() async {
+    if (_storyboards.isEmpty) return;
+
+    // Collect character + scene + prop reference image URLs (shared across all storyboards)
+    final refImageUrls = <String>[];
+    for (final a in _assets) {
+      final referenceSource = PersistentImageStore.preferredSource(
+        localPath: a.referenceImageLocalPath,
+        remoteUrl: a.referenceImageUrl,
+      );
+      if ((a.type == 'character' ||
+              a.type == 'prop' ||
+              a.type == 'location' ||
+              a.type == 'scene') &&
           referenceSource != null &&
           referenceSource.isNotEmpty) {
         refImageUrls.add(referenceSource);
@@ -567,8 +746,8 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
     final batchItems = <SeedanceStoryboardItem>[];
     for (final sb in _storyboards) {
       final imageUrl = PersistentImageStore.preferredSource(
-        localPath: sb.referenceImageLocalPath,
-        remoteUrl: sb.referenceImageUrl,
+            localPath: sb.referenceImageLocalPath,
+            remoteUrl: sb.referenceImageUrl,
           ) ??
           (sb.referenceImageUrls?.isNotEmpty == true
               ? sb.referenceImageUrls!.first
@@ -579,6 +758,7 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
         storyboardId: sb.id,
         imageUrl: imageUrl,
         prompt: sb.videoPrompt,
+        firstFramePrompt: sb.firstFramePrompt,
         description: sb.description ?? '',
         sceneNum: sb.sceneNum,
         shotNum: sb.shotNum,
@@ -626,24 +806,11 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
         continue;
       }
       final videoUrl = result[sb.id]!;
-      final clipId = 'clip_seedance_${DateTime.now().millisecondsSinceEpoch.toString().substring(6)}_${sb.id}';
       try {
-        final clip = VideoClip(
-          id: clipId,
-          projectId: widget.project.id,
-          storyboardId: sb.id,
-          videoUrl: videoUrl,
-          state: 'completed',
-          createdAt: DateTime.now().millisecondsSinceEpoch,
-        );
-        await VideoClipDao().insert(clip);
+        await _saveSeedanceVideoClip(sb.id, videoUrl);
         success++;
       } catch (e) {
         failed++;
-        await AppLogger.warn(
-          'Failed to save Seedance video clip',
-          data: {'storyboard_id': sb.id, 'error': e.toString()},
-        );
       }
     }
 
@@ -669,7 +836,8 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
       for (final sb in _storyboards) {
         if (!mounted) return;
 
-        final clipId = 'clip_${DateTime.now().millisecondsSinceEpoch.toString().substring(6)}';
+        final clipId =
+            'clip_${DateTime.now().millisecondsSinceEpoch.toString().substring(6)}';
         final clip = VideoClip(
           id: clipId,
           projectId: widget.project.id,
@@ -679,7 +847,8 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
         );
         await VideoClipDao().insert(clip);
 
-        setState(() => _genStatus = '正在生成 ${sb.description?.substring(0, 10) ?? '...'} 的首帧图...');
+        setState(() => _genStatus =
+            '正在生成 ${_truncateText(sb.description ?? '...', 10)} 的首帧图...');
 
         try {
           final imagePrompt = sb.firstFramePrompt ?? sb.description ?? '';
@@ -731,7 +900,8 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
 
       for (final clip in failedClips) {
         if (!mounted) return;
-        final sb = _storyboards.where((s) => s.id == clip.storyboardId).firstOrNull;
+        final sb =
+            _storyboards.where((s) => s.id == clip.storyboardId).firstOrNull;
         if (sb == null) continue;
 
         final imageUrl = sb.referenceImageUrl;
@@ -780,8 +950,12 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
         title: const Text('确认'),
         content: const Text('这将删除所有现有视频片段并重新生成，确认继续？'),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('确认')),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('取消')),
+          FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('确认')),
         ],
       ),
     );
@@ -804,7 +978,8 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
 
         if (imageUrl == null || imageUrl.isEmpty) {
           // Skip if no reference image, try generating one first
-          setState(() => _genStatus = '正在生成镜头 ${sb.sceneNum}-${sb.shotNum} 参考图... (${i + 1}/$total)');
+          setState(() => _genStatus =
+              '正在生成镜头 ${sb.sceneNum}-${sb.shotNum} 参考图... (${i + 1}/$total)');
           try {
             final imagePrompt = sb.firstFramePrompt ?? sb.description ?? '';
             final img = await dashscope.generateImage(imagePrompt);
@@ -813,55 +988,74 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
               category: 'storyboards',
               entityId: sb.id,
             );
-            await StoryboardDao().updateImageUrl(sb.id, img, localPath: localPath);
+            await StoryboardDao()
+                .updateImageUrl(sb.id, img, localPath: localPath);
             // Update local copy
             final idx = _storyboards.indexWhere((s) => s.id == sb.id);
             if (idx >= 0) {
               _storyboards[idx] = Storyboard(
-                id: sb.id, projectId: sb.projectId, sceneNum: sb.sceneNum,
-                shotNum: sb.shotNum, shotType: sb.shotType, cameraMove: sb.cameraMove,
-                description: sb.description, firstFramePrompt: sb.firstFramePrompt,
-                videoPrompt: sb.videoPrompt, duration: sb.duration, assets: sb.assets,
-                state: 'image_ready', createdAt: sb.createdAt, referenceImageUrl: img,
+                id: sb.id,
+                projectId: sb.projectId,
+                sceneNum: sb.sceneNum,
+                shotNum: sb.shotNum,
+                shotType: sb.shotType,
+                cameraMove: sb.cameraMove,
+                description: sb.description,
+                firstFramePrompt: sb.firstFramePrompt,
+                videoPrompt: sb.videoPrompt,
+                duration: sb.duration,
+                assets: sb.assets,
+                state: 'image_ready',
+                createdAt: sb.createdAt,
+                referenceImageUrl: img,
                 referenceImageLocalPath: localPath,
                 referenceImageUrls: sb.referenceImageUrls,
               );
             }
             imageUrl = img;
           } catch (e) {
-            await AppLogger.warn('Failed to generate image for retry', data: {'storyboard_id': sb.id});
+            await AppLogger.warn('Failed to generate image for retry',
+                data: {'storyboard_id': sb.id});
           }
         }
 
         final clipId = 'clip_${sb.id}_${DateTime.now().millisecondsSinceEpoch}';
         final clip = VideoClip(
-          id: clipId, projectId: widget.project.id, storyboardId: sb.id,
-          state: 'generating', createdAt: DateTime.now().millisecondsSinceEpoch,
+          id: clipId,
+          projectId: widget.project.id,
+          storyboardId: sb.id,
+          state: 'generating',
+          createdAt: DateTime.now().millisecondsSinceEpoch,
         );
         await VideoClipDao().insert(clip);
 
-        setState(() => _genStatus = '正在生成镜头 ${sb.sceneNum}-${sb.shotNum} 视频... (${i + 1}/$total)');
+        setState(() => _genStatus =
+            '正在生成镜头 ${sb.sceneNum}-${sb.shotNum} 视频... (${i + 1}/$total)');
 
         try {
           final finalImageUrl = imageUrl ?? '';
           if (finalImageUrl.isNotEmpty) {
             final videoPrompt = sb.videoPrompt ?? '';
             final videoUrl = await dashscope.generateVideo(
-              prompt: videoPrompt, firstFrameUrl: finalImageUrl,
+              prompt: videoPrompt,
+              firstFrameUrl: finalImageUrl,
               duration: sb.duration ?? 5,
             );
             await VideoClipDao().update(clipId, {
-              'video_url': videoUrl, 'state': 'completed',
+              'video_url': videoUrl,
+              'state': 'completed',
             });
             success++;
           } else {
             await VideoClipDao().update(clipId, {
-              'state': 'failed', 'error_reason': '无可用参考图',
+              'state': 'failed',
+              'error_reason': '无可用参考图',
             });
           }
         } catch (e) {
           await VideoClipDao().update(clipId, {
-            'state': 'failed', 'error_reason': e.toString(),
+            'state': 'failed',
+            'error_reason': e.toString(),
           });
         }
       }
@@ -878,7 +1072,8 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
   /// Show dialog to edit storyboard fields
   Future<void> _editStoryboard(Storyboard sb) async {
     final descCtrl = TextEditingController(text: sb.description ?? '');
-    final firstFrameCtrl = TextEditingController(text: sb.firstFramePrompt ?? '');
+    final firstFrameCtrl =
+        TextEditingController(text: sb.firstFramePrompt ?? '');
     final videoCtrl = TextEditingController(text: sb.videoPrompt ?? '');
     final durationCtrl = TextEditingController(text: '${sb.duration ?? 5}');
 
@@ -949,7 +1144,8 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
                           label: '镜头类型',
                           value: shotTypes[selectedShotType],
                           items: shotTypes,
-                          onChanged: (v) => selectedShotType = shotTypes.indexOf(v!),
+                          onChanged: (v) =>
+                              selectedShotType = shotTypes.indexOf(v!),
                         ),
                         // Camera move dropdown
                         _editDropdown(
@@ -1095,7 +1291,8 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
             decoration: InputDecoration(
               hintText: hint,
               border: const OutlineInputBorder(),
-              contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+              contentPadding:
+                  const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
             ),
           ),
         ],
@@ -1117,7 +1314,9 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
           Text(label, style: const TextStyle(fontSize: 12, color: Colors.grey)),
           DropdownButtonFormField<String>(
             value: value,
-            items: items.map((e) => DropdownMenuItem(value: e, child: Text(e))).toList(),
+            items: items
+                .map((e) => DropdownMenuItem(value: e, child: Text(e)))
+                .toList(),
             onChanged: onChanged,
             decoration: const InputDecoration(
               border: OutlineInputBorder(),
@@ -1141,13 +1340,15 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
         actions: [
           // Show "继续创建" button for incomplete projects
           if (!_imageReviewMode &&
-              ['planning', 'scripting', 'storyboarding'].contains(widget.project.state))
+              ['planning', 'scripting', 'asseting', 'storyboarding']
+                  .contains(widget.project.state))
             FilledButton.icon(
               onPressed: () async {
                 final result = await Navigator.push<bool>(
                   context,
                   MaterialPageRoute(
-                    builder: (_) => CreateProjectScreen(resumeProject: widget.project),
+                    builder: (_) =>
+                        CreateProjectScreen(resumeProject: widget.project),
                   ),
                 );
                 if (result == true && mounted) {
@@ -1159,78 +1360,6 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
               label: const Text('继续创建'),
               style: FilledButton.styleFrom(
                 visualDensity: VisualDensity.compact,
-              ),
-            ),
-          // Seedance browser button for projects with storyboards
-          if (!_imageReviewMode && _storyboards.isNotEmpty)
-            FilledButton.icon(
-              onPressed: () {
-                // Use first storyboard's image + prompt
-                final sb = _storyboards.first;
-                final imageUrl = PersistentImageStore.preferredSource(
-                      localPath: sb.referenceImageLocalPath,
-                      remoteUrl: sb.referenceImageUrl,
-                    ) ??
-                    (sb.referenceImageUrls?.isNotEmpty == true
-                        ? sb.referenceImageUrls!.first
-                        : null);
-                if (imageUrl == null || imageUrl.isEmpty) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text('当前分镜缺少首帧图，请先生成首帧图后再使用Seedance。'),
-                      duration: Duration(seconds: 4),
-                    ),
-                  );
-                  return;
-                }
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => SeedanceWebScreen(
-                      initialImageUrl: imageUrl,
-                      prompt: sb.videoPrompt,
-                    ),
-                  ),
-                );
-              },
-              icon: const Icon(Icons.web, size: 18),
-              label: const Text('Seedance'),
-              style: FilledButton.styleFrom(
-                visualDensity: VisualDensity.compact,
-                backgroundColor: Colors.purple,
-              ),
-            ),
-          // Batch Seedance button for projects with multiple storyboards
-          // Only enabled when at least one storyboard has a first frame image
-          if (!_imageReviewMode && _storyboards.length > 1)
-            FilledButton.icon(
-              onPressed: () {
-                final hasAnyImage = _storyboards.any((sb) {
-                  final url = PersistentImageStore.preferredSource(
-                        localPath: sb.referenceImageLocalPath,
-                        remoteUrl: sb.referenceImageUrl,
-                      ) ??
-                      (sb.referenceImageUrls?.isNotEmpty == true
-                          ? sb.referenceImageUrls!.first
-                          : null);
-                  return url != null && url.isNotEmpty;
-                });
-                if (!hasAnyImage) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text('没有可用的分镜图片。请先点击"生成首帧图"按钮生成所有分镜首帧图。'),
-                      duration: Duration(seconds: 5),
-                    ),
-                  );
-                  return;
-                }
-                _startSeedanceBatchGeneration();
-              },
-              icon: const Icon(Icons.video_library, size: 18),
-              label: const Text('批量Seedance'),
-              style: FilledButton.styleFrom(
-                visualDensity: VisualDensity.compact,
-                backgroundColor: Colors.deepPurple,
               ),
             ),
           // Image review mode: show progress
@@ -1267,20 +1396,15 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
                 visualDensity: VisualDensity.compact,
               ),
             ),
-          // After images confirmed, generate videos
+          // After images confirmed, generate videos (API mode only — Seedance uses per-storyboard buttons)
           if (!_imageReviewMode &&
               widget.project.state == 'generating' &&
               _storyboards.isNotEmpty &&
               _videoClips.isEmpty &&
-              _allImagesConfirmed)
+              _allImagesConfirmed &&
+              !AppConfig.useSeedanceForVideo)
             FilledButton.icon(
-              onPressed: _generating ? null : () {
-                if (AppConfig.useSeedanceForVideo) {
-                  _startSeedanceBatchGeneration();
-                } else {
-                  _startVideoGeneration();
-                }
-              },
+              onPressed: _generating ? null : _startVideoGeneration,
               icon: _generating
                   ? const SizedBox(
                       width: 16,
@@ -1372,14 +1496,16 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
                                 subtitle: Text(typeLabel),
                                 trailing: Icon(
                                   PersistentImageStore.preferredSource(
-                                            localPath: a.referenceImageLocalPath,
+                                            localPath:
+                                                a.referenceImageLocalPath,
                                             remoteUrl: a.referenceImageUrl,
                                           ) !=
                                           null
                                       ? Icons.check_circle
                                       : Icons.image_not_supported,
                                   color: PersistentImageStore.preferredSource(
-                                            localPath: a.referenceImageLocalPath,
+                                            localPath:
+                                                a.referenceImageLocalPath,
                                             remoteUrl: a.referenceImageUrl,
                                           ) !=
                                           null
@@ -1400,10 +1526,13 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
                         color: Colors.purple,
                         child: Column(
                           children: _storyboards.map((sb) {
-                            final clip = _videoClips.where(
-                              (c) => c.storyboardId == sb.id,
-                            ).firstOrNull;
-                            final isConfirmed = _confirmedImages.containsKey(sb.id);
+                            final clip = _videoClips
+                                .where(
+                                  (c) => c.storyboardId == sb.id,
+                                )
+                                .firstOrNull;
+                            final isConfirmed =
+                                _confirmedImages.containsKey(sb.id);
                             final thumbUrl = isConfirmed
                                 ? _confirmedImages[sb.id]
                                 : PersistentImageStore.preferredSource(
@@ -1413,44 +1542,123 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
 
                             return Card(
                               margin: const EdgeInsets.symmetric(vertical: 4),
-                              child: InkWell(
-                                onTap: () => _editStoryboard(sb),
-                                child: ListTile(
-                                  leading: thumbUrl != null && thumbUrl.isNotEmpty
-                                      ? ClipRRect(
-                                          borderRadius: BorderRadius.circular(4),
-                                          child: PersistentImage(
-                                            remoteUrl: PersistentImageStore.isLocalPath(thumbUrl)
+                              child: Padding(
+                                padding:
+                                    const EdgeInsets.symmetric(vertical: 4),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    InkWell(
+                                      onTap: () => _editStoryboard(sb),
+                                      child: ListTile(
+                                        leading: thumbUrl != null &&
+                                                thumbUrl.isNotEmpty
+                                            ? ClipRRect(
+                                                borderRadius:
+                                                    BorderRadius.circular(4),
+                                                child: PersistentImage(
+                                                  remoteUrl:
+                                                      PersistentImageStore
+                                                              .isLocalPath(
+                                                                  thumbUrl)
+                                                          ? null
+                                                          : thumbUrl,
+                                                  localPath: PersistentImageStore
+                                                          .isLocalPath(thumbUrl)
+                                                      ? thumbUrl
+                                                      : sb.referenceImageLocalPath,
+                                                  width: 40,
+                                                  height: 40,
+                                                  fit: BoxFit.cover,
+                                                  placeholder: CircleAvatar(
+                                                    backgroundColor:
+                                                        Colors.green.shade100,
+                                                    child: const Icon(
+                                                        Icons.check,
+                                                        color: Colors.green,
+                                                        size: 18),
+                                                  ),
+                                                ),
+                                              )
+                                            : CircleAvatar(
+                                                child: Text(
+                                                    '${sb.sceneNum}-${sb.shotNum}'),
+                                              ),
+                                        title: Text(sb.description ?? ''),
+                                        subtitle: Text(
+                                          '${sb.shotType} | ${sb.cameraMove} | ${sb.duration ?? 5}s',
+                                        ),
+                                        trailing: Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            _buildVideoStatus(clip),
+                                            const SizedBox(width: 8),
+                                            const Icon(Icons.edit,
+                                                size: 18, color: Colors.grey),
+                                          ],
+                                        ),
+                                      ),
+                                    ),
+                                    // Per-storyboard "生成视频" button
+                                    if (!_imageReviewMode &&
+                                        thumbUrl != null &&
+                                        thumbUrl.isNotEmpty)
+                                      Padding(
+                                        padding: const EdgeInsets.only(
+                                            left: 72, right: 16),
+                                        child: SizedBox(
+                                          width: double.infinity,
+                                          height: 32,
+                                          child: FilledButton.icon(
+                                            onPressed: clip != null &&
+                                                    (clip.state ==
+                                                            'completed' ||
+                                                        clip.state == 'done')
                                                 ? null
-                                                : thumbUrl,
-                                            localPath: PersistentImageStore.isLocalPath(thumbUrl)
-                                                ? thumbUrl
-                                                : sb.referenceImageLocalPath,
-                                            width: 40,
-                                            height: 40,
-                                            fit: BoxFit.cover,
-                                            placeholder: CircleAvatar(
-                                              backgroundColor: Colors.green.shade100,
-                                              child: const Icon(Icons.check,
-                                                  color: Colors.green, size: 18),
+                                                : () => AppConfig
+                                                        .useSeedanceForVideo
+                                                    ? _generateVideoForStoryboard(
+                                                        sb)
+                                                    : _generateApiVideoForStoryboard(
+                                                        sb),
+                                            icon: Icon(
+                                              clip != null &&
+                                                      (clip.state ==
+                                                              'completed' ||
+                                                          clip.state == 'done')
+                                                  ? Icons.check_circle
+                                                  : Icons.videocam,
+                                              size: 16,
+                                            ),
+                                            label: Text(
+                                              clip != null &&
+                                                      (clip.state ==
+                                                              'completed' ||
+                                                          clip.state == 'done')
+                                                  ? '视频已生成'
+                                                  : (clip != null
+                                                      ? '重新生成视频'
+                                                      : '生成视频'),
+                                              style:
+                                                  const TextStyle(fontSize: 12),
+                                            ),
+                                            style: FilledButton.styleFrom(
+                                              visualDensity:
+                                                  VisualDensity.compact,
+                                              backgroundColor: clip != null &&
+                                                      (clip.state ==
+                                                              'completed' ||
+                                                          clip.state == 'done')
+                                                  ? Colors.green.shade700
+                                                  : Colors.purple,
+                                              padding:
+                                                  const EdgeInsets.symmetric(
+                                                      horizontal: 8),
                                             ),
                                           ),
-                                        )
-                                      : CircleAvatar(
-                                          child: Text('${sb.sceneNum}-${sb.shotNum}'),
                                         ),
-                                  title: Text(sb.description ?? ''),
-                                  subtitle: Text(
-                                    '${sb.shotType} | ${sb.cameraMove} | ${sb.duration ?? 5}s',
-                                  ),
-                                  trailing: Row(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      _buildVideoStatus(clip),
-                                      const SizedBox(width: 8),
-                                      const Icon(Icons.edit, size: 18, color: Colors.grey),
-                                    ],
-                                  ),
+                                      ),
+                                  ],
                                 ),
                               ),
                             );
@@ -1466,36 +1674,45 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
                         color: Colors.green,
                         child: Column(
                           children: _videoClips.map((clip) {
-                            final sb = _storyboards.where(
-                              (s) => s.id == clip.storyboardId,
-                            ).firstOrNull;
-                            final thumbUrl = PersistentImageStore.preferredSource(
-                                  localPath: sb?.referenceImageLocalPath,
-                                  remoteUrl: sb?.referenceImageUrl,
-                                ) ??
-                                '';
+                            final sb = _storyboards
+                                .where(
+                                  (s) => s.id == clip.storyboardId,
+                                )
+                                .firstOrNull;
+                            final thumbUrl =
+                                PersistentImageStore.preferredSource(
+                                      localPath: sb?.referenceImageLocalPath,
+                                      remoteUrl: sb?.referenceImageUrl,
+                                    ) ??
+                                    '';
 
                             return Card(
                               margin: const EdgeInsets.symmetric(vertical: 4),
                               child: InkWell(
-                                onTap: (clip.state == 'completed' || clip.state == 'done') && clip.videoUrl != null
+                                onTap: (clip.state == 'completed' ||
+                                            clip.state == 'done') &&
+                                        clip.videoUrl != null
                                     ? () => _previewVideo(clip, sb)
                                     : null,
                                 child: ListTile(
                                   leading: thumbUrl.isNotEmpty
                                       ? ClipRRect(
-                                          borderRadius: BorderRadius.circular(4),
+                                          borderRadius:
+                                              BorderRadius.circular(4),
                                           child: PersistentImage(
-                                            remoteUrl: PersistentImageStore.isLocalPath(thumbUrl)
+                                            remoteUrl: PersistentImageStore
+                                                    .isLocalPath(thumbUrl)
                                                 ? null
                                                 : thumbUrl,
-                                            localPath: PersistentImageStore.isLocalPath(thumbUrl)
+                                            localPath: PersistentImageStore
+                                                    .isLocalPath(thumbUrl)
                                                 ? thumbUrl
                                                 : sb?.referenceImageLocalPath,
                                             width: 48,
                                             height: 48,
                                             fit: BoxFit.cover,
-                                            placeholder: _buildVideoStatusIcon(clip.state),
+                                            placeholder: _buildVideoStatusIcon(
+                                                clip.state),
                                           ),
                                         )
                                       : _buildVideoStatusIcon(clip.state),
@@ -1505,12 +1722,16 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
                                         : '分镜: ${clip.storyboardId}',
                                   ),
                                   subtitle: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
                                     children: [
                                       if (clip.errorReason != null)
                                         Text(clip.errorReason!,
-                                            style: const TextStyle(color: Colors.red)),
-                                      if ((clip.state == 'completed' || clip.state == 'done') && clip.videoUrl != null)
+                                            style: const TextStyle(
+                                                color: Colors.red)),
+                                      if ((clip.state == 'completed' ||
+                                              clip.state == 'done') &&
+                                          clip.videoUrl != null)
                                         Text(
                                           '点击预览视频',
                                           style: const TextStyle(
@@ -1549,7 +1770,8 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
                         ),
                       ),
                     const SizedBox(height: 8),
-                    if (_videoClips.any((c) => c.state == 'completed' || c.state == 'done'))
+                    if (_videoClips.any(
+                        (c) => c.state == 'completed' || c.state == 'done'))
                       SizedBox(
                         width: double.infinity,
                         child: FilledButton.icon(
@@ -1567,7 +1789,8 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
                       const Center(
                         child: Padding(
                           padding: EdgeInsets.all(32),
-                          child: Text('暂无分镜数据', style: TextStyle(color: Colors.grey)),
+                          child: Text('暂无分镜数据',
+                              style: TextStyle(color: Colors.grey)),
                         ),
                       ),
                   ],
@@ -1656,7 +1879,8 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
                                 child: PersistentImage(
                                   remoteUrl: _currentImageUrl,
                                   localPath: _currentImageIndex >= 0 &&
-                                          _currentImageIndex < _storyboards.length
+                                          _currentImageIndex <
+                                              _storyboards.length
                                       ? _storyboards[_currentImageIndex]
                                           .referenceImageLocalPath
                                       : null,
@@ -1694,7 +1918,8 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
                       child: Column(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          const Icon(Icons.error_outline, size: 48, color: Colors.red),
+                          const Icon(Icons.error_outline,
+                              size: 48, color: Colors.red),
                           const SizedBox(height: 16),
                           Text(
                             _genStatus,
@@ -1771,7 +1996,8 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
               children: [
                 Icon(icon, color: color, size: 20),
                 const SizedBox(width: 8),
-                Text(title, style: const TextStyle(fontWeight: FontWeight.bold)),
+                Text(title,
+                    style: const TextStyle(fontWeight: FontWeight.bold)),
               ],
             ),
             const Divider(),
@@ -1801,7 +2027,11 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
   Widget _buildVideoStatus(VideoClip? clip) {
     if (clip == null) return const Text('未生成');
     return Text(
-      (clip.state == 'completed' || clip.state == 'done') ? '已完成' : clip.state == 'failed' ? '失败' : '生成中',
+      (clip.state == 'completed' || clip.state == 'done')
+          ? '已完成'
+          : clip.state == 'failed'
+              ? '失败'
+              : '生成中',
       style: TextStyle(
         color: (clip.state == 'completed' || clip.state == 'done')
             ? Colors.green
@@ -1836,9 +2066,7 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
   Future<void> _previewVideo(VideoClip clip, Storyboard? sb) async {
     if (clip.videoUrl == null) return;
 
-    final title = sb != null
-        ? '镜头 ${sb.sceneNum}-${sb.shotNum}'
-        : '视频预览';
+    final title = sb != null ? '镜头 ${sb.sceneNum}-${sb.shotNum}' : '视频预览';
 
     await Navigator.push(
       context,
@@ -1850,4 +2078,9 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
       ),
     );
   }
+}
+
+String _truncateText(String value, int maxLength) {
+  if (value.length <= maxLength) return value;
+  return value.substring(0, maxLength);
 }

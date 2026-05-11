@@ -49,7 +49,20 @@ class ProjectDao {
 
   Future<void> delete(String id) async {
     final db = await _db.database;
-    await db.delete('projects', where: 'id = ?', whereArgs: [id]);
+    await db.transaction((txn) async {
+      for (final table in [
+        'tasks',
+        'video_clips',
+        'final_cuts',
+        'storyboards',
+        'assets',
+        'scripts',
+        'briefs',
+      ]) {
+        await txn.delete(table, where: 'project_id = ?', whereArgs: [id]);
+      }
+      await txn.delete('projects', where: 'id = ?', whereArgs: [id]);
+    });
   }
 }
 
@@ -69,7 +82,8 @@ class BriefDao {
 
   Future<void> insert(Brief brief) async {
     final db = await _db.database;
-    await db.insert('briefs', brief.toMap(), conflictAlgorithm: ConflictAlgorithm.replace);
+    await db.insert('briefs', brief.toMap(),
+        conflictAlgorithm: ConflictAlgorithm.replace);
   }
 }
 
@@ -89,7 +103,8 @@ class ScriptDao {
 
   Future<void> insert(Script script) async {
     final db = await _db.database;
-    await db.insert('scripts', script.toMap(), conflictAlgorithm: ConflictAlgorithm.replace);
+    await db.insert('scripts', script.toMap(),
+        conflictAlgorithm: ConflictAlgorithm.replace);
   }
 }
 
@@ -115,7 +130,8 @@ class AssetDao {
   Future<void> insertAll(List<Asset> assets) async {
     final db = await _db.database;
     for (final asset in assets) {
-      await db.insert('assets', asset.toMap(), conflictAlgorithm: ConflictAlgorithm.replace);
+      await db.insert('assets', asset.toMap(),
+          conflictAlgorithm: ConflictAlgorithm.replace);
     }
   }
 
@@ -164,7 +180,8 @@ class StoryboardDao {
   Future<void> insertAll(List<Storyboard> sbs) async {
     final db = await _db.database;
     for (final sb in sbs) {
-      await db.insert('storyboards', sb.toMap(), conflictAlgorithm: ConflictAlgorithm.replace);
+      await db.insert('storyboards', sb.toMap(),
+          conflictAlgorithm: ConflictAlgorithm.replace);
     }
   }
 
@@ -183,7 +200,8 @@ class StoryboardDao {
     await db.update('storyboards', updates, where: 'id = ?', whereArgs: [id]);
   }
 
-  Future<void> updateImageUrl(String id, String imageUrl, {String? localPath}) async {
+  Future<void> updateImageUrl(String id, String imageUrl,
+      {String? localPath}) async {
     final db = await _db.database;
     await db.update(
       'storyboards',
@@ -205,7 +223,8 @@ class StoryboardDao {
       'storyboards',
       {
         'reference_image_url': imageUrls.isNotEmpty ? imageUrls[0] : null,
-        'reference_image_urls': imageUrls.isNotEmpty ? jsonEncode(imageUrls) : null,
+        'reference_image_urls':
+            imageUrls.isNotEmpty ? jsonEncode(imageUrls) : null,
         'state': 'image_ready',
       },
       where: 'id = ?',
@@ -213,7 +232,6 @@ class StoryboardDao {
     );
   }
 }
-
 
 class VideoClipDao {
   final AppDatabase _db = AppDatabase();

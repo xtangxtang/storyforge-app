@@ -75,13 +75,11 @@ class AppConfig {
     llmApiKey = prefs.getString(_llmApiKey) ?? '';
     llmModel = prefs.getString(_llmModel) ?? defaultModel;
 
-    imageBaseUrl =
-        prefs.getString(_imageBaseUrl) ?? defaultImageBaseUrl;
+    imageBaseUrl = prefs.getString(_imageBaseUrl) ?? defaultImageBaseUrl;
     imageApiKey = prefs.getString(_imageApiKey) ?? '';
     imageModel = prefs.getString(_imageModel) ?? defaultImageModel;
 
-    videoBaseUrl =
-        prefs.getString(_videoBaseUrl) ?? defaultVideoBaseUrl;
+    videoBaseUrl = prefs.getString(_videoBaseUrl) ?? defaultVideoBaseUrl;
     videoApiKey = prefs.getString(_videoApiKey) ?? '';
     videoModel = prefs.getString(_videoModel) ?? defaultVideoModel;
 
@@ -89,7 +87,8 @@ class AppConfig {
 
     httpsProxy = prefs.getString(_httpsProxy) ?? '';
 
-    seedanceUrl = prefs.getString(_seedanceUrl) ?? 'https://seedance.io/zh/seedance-2';
+    seedanceUrl =
+        prefs.getString(_seedanceUrl) ?? 'https://seedance.io/zh/seedance-2';
     seedanceEmail = prefs.getString(_seedanceEmail) ?? '';
     seedancePassword = prefs.getString(_seedancePassword) ?? '';
   }
@@ -170,8 +169,12 @@ class AppConfig {
     }
   }
 
-  static bool get isConfigured =>
-      llmApiKey.isNotEmpty && imageApiKey.isNotEmpty;
+  static bool get isConfigured {
+    final hasTextAndImageKeys = llmApiKey.isNotEmpty && imageApiKey.isNotEmpty;
+    if (!hasTextAndImageKeys) return false;
+    if (useSeedanceForVideo) return true;
+    return videoApiKey.isNotEmpty;
+  }
 
   static String _normalizeBaseUrl(String value) {
     return value.trim().replaceAll(RegExp(r'/+$'), '');
