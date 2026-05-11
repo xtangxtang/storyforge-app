@@ -29,6 +29,7 @@ class CreateProjectScreen extends StatefulWidget {
 class _CreateProjectScreenState extends State<CreateProjectScreen> {
   final _promptController = TextEditingController();
   final _guidanceController = TextEditingController();
+  final _stageGuidanceController = TextEditingController();
   final _projectDao = ProjectDao();
   final _wikiStore = ProjectWikiStore();
   late LlmService _llm;
@@ -78,6 +79,9 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
   String? _guidancePromptSnapshot;
   List<DirectorGuidanceQuestion> _guidanceQuestions = [];
   final Map<String, String> _directorGuidanceAnswers = {};
+  final Map<int, bool> _stageGuidanceApproved = {};
+  final Map<int, List<DirectorGuidanceQuestion>> _stageGuidanceQuestions = {};
+  final Map<int, String> _stageGuidanceInputs = {};
 
   // Storyboard generation settings
   double _storyboardTemperature = 0.3;
@@ -571,7 +575,7 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
 
   String _buildDirectorGuidanceText() {
     _saveCurrentGuidanceAnswer();
-    return _guidanceQuestions
+    final initialGuidance = _guidanceQuestions
         .map((question) {
           final answer = _directorGuidanceAnswers[question.id]?.trim();
           if (answer == null || answer.isEmpty) return null;
@@ -579,6 +583,17 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
         })
         .whereType<String>()
         .join('\n');
+    final stageGuidance = _stageGuidanceInputs.entries
+        .where((entry) => entry.value.trim().isNotEmpty)
+        .map((entry) {
+      final label = entry.key < _stageDefs.length
+          ? _stageDefs[entry.key].label
+          : '阶段 ${entry.key}';
+      return '阶段前确认 - $label：${entry.value.trim()}';
+    }).join('\n');
+    return [initialGuidance, stageGuidance]
+        .where((part) => part.trim().isNotEmpty)
+        .join('\n\n');
   }
 
   List<Map<String, Object?>> _guidanceQuestionMaps() {
@@ -599,6 +614,119 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
         await _wikiStore.compileContextPack(_projectId!, stage: stage);
   }
 
+  Future<bool> _ensureStageGuidance(StageProgress stage) async {
+    if (_currentStageIndex == 0) return true;
+    if (_stageGuidanceApproved[_currentStageIndex] == true) return true;
+    if (_projectId == null || _director == null) return true;
+
+    final workflowStage = _stageIndexToWorkflowStage(_currentStageIndex);
+    final wikiContext =
+        await _wikiStore.compileContextPack(_projectId!, stage: workflowStage);
+
+    setState(() {
+      stage.status = 'needs_input';
+      stage.messages.add(_ProgressMessage(
+        type: 'info',
+        text: 'DirectorAgent 正在读取 wiki，生成进入「${stage.label}」前的建议/追问...',
+      ));
+    });
+
+    final questions = await _director!.analyzeStagePreflightQuestions(
+      stageLabel: stage.label,
+      workflowStage: workflowStage,
+      wikiContext: wikiContext,
+    );
+    if (!mounted) return false;
+
+    final effectiveQuestions = questions.isEmpty
+        ? [_fallbackStageGuidanceQuestion(stage.label, workflowStage)]
+        : questions;
+
+    _stageGuidanceQuestions[_currentStageIndex] = effectiveQuestions;
+    _stageGuidanceController.text =
+        _stageGuidanceInputs[_currentStageIndex] ?? '';
+    stage.contentPreview = _formatStageGuidanceQuestions(effectiveQuestions);
+    stage.feedback = '进入「${stage.label}」前，请先查看 DirectorAgent 的建议/追问。';
+    setState(() {});
+    return false;
+  }
+
+  DirectorGuidanceQuestion _fallbackStageGuidanceQuestion(
+    String stageLabel,
+    String workflowStage,
+  ) {
+    final detail = switch (workflowStage) {
+      'scripting' => '请确认进入编剧前是否还需要补充人物关系、剧情推进、台词风格或结局落点。',
+      'asseting' => '请确认进入角色设计前是否还需要补充角色外貌、身高体型、服装、道具和场景视觉锚点。',
+      'storyboarding' => '请确认进入分镜前是否还需要补充镜头节奏、构图风格、关键动作或不能改动的剧情点。',
+      'generating' => '请确认进入视频生成前是否还需要补充分辨率、画幅、时长、参考图使用方式或运镜偏好。',
+      _ => '请确认进入「$stageLabel」前是否还有必须补充或修正的信息。',
+    };
+    return DirectorGuidanceQuestion(
+      id: 'stage_${workflowStage}_confirmation',
+      title: '阶段前确认',
+      question: detail,
+      hint: '如果没有补充，请输入“确认，无补充”。',
+      required: true,
+    );
+  }
+
+  String _formatStageGuidanceQuestions(
+      List<DirectorGuidanceQuestion> questions) {
+    final lines = <String>[];
+    for (var i = 0; i < questions.length; i++) {
+      final q = questions[i];
+      lines
+        ..add('${i + 1}. ${q.title}${q.required ? '（必填）' : '（建议）'}')
+        ..add(q.question);
+      if (q.hint.trim().isNotEmpty) {
+        lines.add('示例/提示：${q.hint}');
+      }
+      lines.add('');
+    }
+    return lines.join('\n').trim();
+  }
+
+  Future<void> _confirmStageGuidanceAndRun() async {
+    final input = _stageGuidanceController.text.trim();
+    final questions = _stageGuidanceQuestions[_currentStageIndex] ?? const [];
+    final hasRequiredQuestion = questions.any((q) => q.required);
+    if (hasRequiredQuestion && input.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('当前阶段有必填追问，请输入你的确认或补充')),
+      );
+      return;
+    }
+
+    _stageGuidanceInputs[_currentStageIndex] = input;
+    _stageGuidanceApproved[_currentStageIndex] = true;
+    final currentStage = _stages[_currentStageIndex];
+    currentStage.messages.add(_ProgressMessage(
+      type: 'success',
+      text: input.isEmpty ? '已确认阶段前建议，继续生成。' : '已保存阶段前补充，继续生成。',
+    ));
+
+    if (_projectId != null) {
+      await _wikiStore.updateUserAnswers(
+        projectId: _projectId!,
+        guidanceText: _buildDirectorGuidanceText(),
+      );
+      await _wikiStore.appendLog(
+        _projectId!,
+        'Confirmed stage preflight guidance',
+        data: {
+          'stage': _stageIndexToWorkflowStage(_currentStageIndex),
+          'input': input,
+        },
+      );
+    }
+
+    currentStage.status = 'running';
+    currentStage.feedback = null;
+    setState(() {});
+    await _runCurrentStage();
+  }
+
   /// Get existing stage or create new one (prevents duplicate cards)
   StageProgress _getOrCreateCurrentStage() {
     // Check if we already have a card for this stage
@@ -611,6 +739,8 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
             .add(_ProgressMessage(type: 'warn', text: '--- 根据反馈重新生成 ---'));
         existing.contentPreview = '';
         existing.finalData = null;
+      } else if (existing.status == 'needs_input') {
+        return existing;
       } else if (existing.status == 'pending') {
         existing.status = 'running';
       }
@@ -637,6 +767,11 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
 
     try {
       AgentResult result;
+      if (!await _ensureStageGuidance(stage)) {
+        setState(() {});
+        return;
+      }
+
       switch (_currentStageIndex) {
         case 0: // 策划
           await _refreshCreativeMemory('planning');
@@ -2537,6 +2672,8 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
         return '已完成，请审阅';
       case 'warn':
         return '部分完成';
+      case 'needs_input':
+        return '等待用户确认';
       case 'error':
         return '失败';
       default:
@@ -2653,6 +2790,7 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
     final isDone = currentStage?.status == 'done';
     final isWarn = currentStage?.status == 'warn';
     final isError = currentStage?.status == 'error';
+    final needsInput = currentStage?.status == 'needs_input';
     final isLastStage = _currentStageIndex >= _stageDefs.length - 1;
 
     return Container(
@@ -2683,6 +2821,58 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
               },
               icon: const Icon(Icons.refresh),
               label: const Text('重新生成'),
+            ),
+          ]
+          // Stage preflight state
+          else if (needsInput) ...[
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                currentStage?.feedback ?? '请先确认阶段前建议。',
+                style: const TextStyle(color: Colors.orange, fontSize: 13),
+              ),
+            ),
+            const SizedBox(height: 8),
+            TextField(
+              controller: _stageGuidanceController,
+              maxLines: 3,
+              decoration: InputDecoration(
+                hintText:
+                    (_stageGuidanceQuestions[_currentStageIndex] ?? const [])
+                            .any((q) => q.required)
+                        ? '必填：请输入你的确认或补充；没有补充可写“确认，无补充”'
+                        : '可选：输入你的判断、补充或修改要求；留空则表示确认建议并继续',
+                border: const OutlineInputBorder(),
+                contentPadding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: () async {
+                      _stageGuidanceApproved[_currentStageIndex] = false;
+                      currentStage?.status = 'running';
+                      currentStage?.contentPreview = '';
+                      currentStage?.feedback = null;
+                      setState(() {});
+                      await _runCurrentStage();
+                    },
+                    icon: const Icon(Icons.refresh),
+                    label: const Text('重新分析'),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: FilledButton.icon(
+                    onPressed: _confirmStageGuidanceAndRun,
+                    icon: const Icon(Icons.play_arrow),
+                    label: const Text('确认并生成'),
+                  ),
+                ),
+              ],
             ),
           ]
           // Done or Warn state (warn = review exhausted but allow to continue)
@@ -2753,6 +2943,7 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
   void dispose() {
     _promptController.dispose();
     _guidanceController.dispose();
+    _stageGuidanceController.dispose();
     _llm.dispose();
     super.dispose();
   }

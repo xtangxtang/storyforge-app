@@ -319,6 +319,82 @@ $creativeInput''';
     }
   }
 
+  Future<List<DirectorGuidanceQuestion>> analyzeStagePreflightQuestions({
+    required String stageLabel,
+    required String workflowStage,
+    required String wikiContext,
+  }) async {
+    final prompt = '''请阅读当前项目 wiki，在进入「$stageLabel」阶段前给出需要用户判断或补充的问题列表。
+
+重要规则：
+- 不要替用户补写剧情，不要直接生成本阶段内容。
+- 只提出会影响「$stageLabel」质量、一致性或执行效果的问题/建议。
+- 如果 wiki 已经明确的信息，不要重复追问。
+- 如果只是建议但不阻塞生成，required=false。
+- 如果缺失信息会导致人物关系、剧情、道具、视觉一致性或视频生成明显漂移，required=true。
+- 问题数量控制在 0-5 个，按重要性排序。
+
+输出严格 JSON，不要任何多余文字：
+{
+  "questions": [
+    {
+      "id": "稳定英文或拼音下划线 id",
+      "title": "简短标题",
+      "question": "面向用户的一句话问题或建议",
+      "hint": "用户可输入的判断/补充示例，不要替用户决定",
+      "required": true
+    }
+  ]
+}
+
+当前工作流阶段：$workflowStage
+
+项目 wiki 上下文：
+$wikiContext''';
+
+    try {
+      final response = await llm.chatCompletion(
+        messages: [
+          ChatMessage(
+            role: 'system',
+            content:
+                '你是 DirectorAgent 的阶段前审阅模块，只负责基于项目 wiki 发现进入下一阶段前需要用户判断或补充的信息。',
+          ),
+          ChatMessage(role: 'user', content: prompt),
+        ],
+        jsonMode: true,
+        temperature: 0.2,
+        requestTag: 'director.stage_preflight.$workflowStage',
+      );
+      final decoded = jsonDecode(response.content);
+      final rawQuestions =
+          decoded is Map<String, dynamic> ? decoded['questions'] : null;
+      if (rawQuestions is! List) return const [];
+
+      final questions = <DirectorGuidanceQuestion>[];
+      for (var i = 0; i < rawQuestions.length && i < 5; i++) {
+        final item = rawQuestions[i];
+        if (item is Map<String, dynamic>) {
+          questions.add(DirectorGuidanceQuestion.fromMap(item, i));
+        } else if (item is Map) {
+          questions.add(
+            DirectorGuidanceQuestion.fromMap(
+                Map<String, dynamic>.from(item), i),
+          );
+        }
+      }
+      return questions;
+    } catch (e, st) {
+      await AppLogger.error(
+        'Director stage preflight analysis failed',
+        data: {'stage': workflowStage},
+        error: e,
+        stackTrace: st,
+      );
+      return const [];
+    }
+  }
+
   DirectorAgent({required this.llm})
       : planningAgent = PlanningAgent(llm: llm),
         scriptAgent = ScriptAgent(llm: llm),

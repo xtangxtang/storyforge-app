@@ -79,6 +79,7 @@ Screens (UI) -> Core (Agents/Business Logic) -> Services (External APIs) -> DB (
 - **No dependency injection**: Services and DAOs are instantiated with `new` throughout.
 - **Logging**: `AppLogger` writes to `%LOCALAPPDATA%\Storyforge\logs\storyforge.log` on Windows with structured text entries.
 - **Dart SDK**: `^3.6.2`, Flutter 3.27+
+- **Project memory direction**: Storyforge is moving toward a wiki-first memory architecture inspired by Karpathy's `llm-wiki`. Keep SQLite as a runtime/UI cache for now, but treat project wiki files as the cross-stage creative memory source. See `doc/wiki-memory-plan.md` before changing DirectorAgent, AgentContext memory, project creation, stage outputs, or project persistence.
 
 ## User Preferences
 
