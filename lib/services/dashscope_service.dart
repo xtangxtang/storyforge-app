@@ -124,6 +124,10 @@ class DashscopeService {
     );
 
     if (response.statusCode != 200) {
+      final errorMessage = _dashScopeErrorMessage(
+        response.body,
+        fallback: 'HTTP ${response.statusCode}',
+      );
       await AppLogger.error(
         'Image generation API returned non-200 status',
         data: {
@@ -131,9 +135,10 @@ class DashscopeService {
           'statusCode': response.statusCode,
           'endpoint': uri.toString(),
           'bodyPreview': AppLogger.preview(response.body),
+          'errorMessage': errorMessage,
         },
       );
-      throw Exception('图片生成失败 (${response.statusCode}): ${response.body}');
+      throw Exception('图片生成失败 (${response.statusCode}): $errorMessage');
     }
 
     final data = jsonDecode(response.body) as Map<String, dynamic>;
@@ -186,6 +191,23 @@ class DashscopeService {
       },
     );
     throw Exception('图片生成响应中没有图片 URL');
+  }
+
+  String _dashScopeErrorMessage(String body, {required String fallback}) {
+    try {
+      final decoded = jsonDecode(body);
+      if (decoded is Map) {
+        final code = decoded['code']?.toString();
+        final message = decoded['message']?.toString();
+        if (code == 'DataInspectionFailed') {
+          return '内容安全检查未通过。请缩短提示词，并避免把完整剧情、恋爱冲突、暴力冲突或无关 wiki 日志放入图片生成提示词。';
+        }
+        if (message != null && message.isNotEmpty) {
+          return code != null && code.isNotEmpty ? '$code: $message' : message;
+        }
+      }
+    } catch (_) {}
+    return fallback;
   }
 
   Future<String> _pollImageTask(String taskId) async {

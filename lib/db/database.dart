@@ -5,7 +5,7 @@ class AppDatabase {
   static final AppDatabase _instance = AppDatabase._internal();
   static Database? _database;
 
-  static const int _currentVersion = 3;
+  static const int _currentVersion = 4;
 
   AppDatabase._internal();
 
@@ -109,6 +109,7 @@ class AppDatabase {
         project_id TEXT NOT NULL REFERENCES projects(id),
         storyboard_id TEXT NOT NULL,
         video_url TEXT,
+        video_local_path TEXT,
         state TEXT NOT NULL DEFAULT 'generating',
         is_selected INTEGER NOT NULL DEFAULT 0,
         error_reason TEXT,
@@ -165,6 +166,13 @@ class AppDatabase {
         ADD COLUMN reference_image_local_path TEXT
       ''');
     }
+
+    if (oldVersion < 4) {
+      await db.execute('''
+        ALTER TABLE video_clips
+        ADD COLUMN video_local_path TEXT
+      ''');
+    }
   }
 
   Future<void> close() async {
@@ -175,8 +183,14 @@ class AppDatabase {
   Future<void> reset() async {
     final db = await database;
     for (final table in [
-      'tasks', 'video_clips', 'final_cuts', 'storyboards',
-      'assets', 'scripts', 'briefs', 'projects',
+      'tasks',
+      'video_clips',
+      'final_cuts',
+      'storyboards',
+      'assets',
+      'scripts',
+      'briefs',
+      'projects',
     ]) {
       await db.execute('DROP TABLE IF EXISTS $table');
     }

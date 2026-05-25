@@ -7,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../config/app_config.dart';
 import '../services/http_client_factory.dart';
 import '../services/persistent_image_store.dart';
+import '../services/project_wiki_store.dart';
 import '../widgets/persistent_image.dart';
 
 /// Storyboard data passed from project_detail_screen for batch video generation.
@@ -44,12 +45,14 @@ class SeedanceWebScreen extends StatefulWidget {
 
   /// Batch mode: list of storyboards to process.
   final List<SeedanceStoryboardItem>? batchStoryboards;
+  final String? projectId;
 
   const SeedanceWebScreen({
     super.key,
     this.initialImageUrl,
     this.prompt,
     this.batchStoryboards,
+    this.projectId,
   });
 
   bool get isBatchMode =>
@@ -81,6 +84,7 @@ class _SeedanceWebScreenState extends State<SeedanceWebScreen> {
   bool _batchRunning = false;
   int _batchCurrentIndex = -1;
   final Map<String, String> _batchResults = {}; // storyboardId -> videoUrl
+  final Map<String, String> _batchLocalPaths = {}; // storyboardId -> local file
   final Map<String, String> _batchErrors = {}; // storyboardId -> error message
   bool _batchComplete = false;
 
@@ -95,6 +99,7 @@ class _SeedanceWebScreenState extends State<SeedanceWebScreen> {
   // Persistence keys
   static const String _prefBatchState = 'seedance_batch_state';
   static const String _prefBatchResults = 'seedance_batch_results';
+  static const String _prefBatchLocalPaths = 'seedance_batch_local_paths';
   static const String _prefBatchErrors = 'seedance_batch_errors';
   bool _hasSavedState = false;
 
@@ -520,6 +525,7 @@ class _SeedanceWebScreenState extends State<SeedanceWebScreen> {
       if (type == 'video_url') {
         final url = message['url'] as String?;
         if (url != null && url.isNotEmpty) {
+          unawaited(_persistExtractedVideo(url));
           if (mounted) {
             setState(() {
               _extractedVideoUrl = url;
@@ -530,6 +536,36 @@ class _SeedanceWebScreenState extends State<SeedanceWebScreen> {
         }
       }
     }
+  }
+
+  Future<String?> _persistExtractedVideo(
+    String videoUrl, {
+    String? storyboardId,
+  }) async {
+    final projectId = widget.projectId;
+    if (projectId == null || projectId.isEmpty) return null;
+    final localPath = await ProjectWikiStore().persistVideoFile(
+      projectId: projectId,
+      videoUrl: videoUrl,
+      storyboardId: storyboardId ?? _currentStoryboardIdForSave(),
+    );
+    if (localPath != null && mounted) {
+      setState(() => _statusMessage = '视频已保存到项目 wiki: $localPath');
+    }
+    return localPath;
+  }
+
+  String? _currentStoryboardIdForSave() {
+    if (!widget.isBatchMode || widget.batchStoryboards!.isEmpty) return null;
+    if (_interactiveCurrentIndex >= 0 &&
+        _interactiveCurrentIndex < widget.batchStoryboards!.length) {
+      return widget.batchStoryboards![_interactiveCurrentIndex].storyboardId;
+    }
+    if (_batchCurrentIndex >= 0 &&
+        _batchCurrentIndex < widget.batchStoryboards!.length) {
+      return widget.batchStoryboards![_batchCurrentIndex].storyboardId;
+    }
+    return widget.batchStoryboards!.first.storyboardId;
   }
 
   // ===================================================================
@@ -916,9 +952,15 @@ class _SeedanceWebScreenState extends State<SeedanceWebScreen> {
     setState(() => _statusMessage = '正在上传图片到 seedance.io...');
     final base64Only = base64Data.split(',').last;
     String mimeType = 'image/png';
+    String fileName = 'storyforge_reference.png';
     if (base64Data.startsWith('data:image/jpeg'))
       mimeType = 'image/jpeg';
     else if (base64Data.startsWith('data:image/webp')) mimeType = 'image/webp';
+    if (mimeType == 'image/jpeg') {
+      fileName = 'storyforge_reference.jpg';
+    } else if (mimeType == 'image/webp') {
+      fileName = 'storyforge_reference.webp';
+    }
 
     const injectScript = '''
     (function() {
@@ -984,15 +1026,49 @@ class _SeedanceWebScreenState extends State<SeedanceWebScreen> {
         }
         return null;
       }
+      function dispatchUploadEvents(input) {
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+        input.dispatchEvent(new Event('blur', { bubbles: true }));
+        input.dispatchEvent(new Event('focusout', { bubbles: true }));
+      }
+      function patchBrokenPreviews(dataUrl) {
+        let patched = 0;
+        const candidates = Array.from(document.querySelectorAll('img'));
+        for (const img of candidates) {
+          const src = img.getAttribute('src') || '';
+          const alt = (img.getAttribute('alt') || '').toLowerCase();
+          const rect = img.getBoundingClientRect();
+          const looksLikePreview =
+            alt.includes('preview') ||
+            src === '' ||
+            src === '#' ||
+            src === 'null' ||
+            src === 'undefined' ||
+            img.naturalWidth === 0 ||
+            rect.width >= 40 && rect.height >= 40;
+          if (!looksLikePreview) continue;
+          if (img.complete && img.naturalWidth > 0 && src) continue;
+          img.src = dataUrl;
+          img.style.objectFit = 'cover';
+          img.style.width = '100%';
+          img.style.height = '100%';
+          patched++;
+          if (patched >= 1) break;
+        }
+        return patched;
+      }
       try {
         const base64 = '%BASE64_DATA%';
         const mimeType = '%MIME_TYPE%';
+        const fileName = '%FILE_NAME%';
+        const dataUrl = 'data:' + mimeType + ';base64,' + base64;
         const binaryString = atob(base64);
         const len = binaryString.length;
         const bytes = new Uint8Array(len);
         for (let i = 0; i < len; i++) bytes[i] = binaryString.charCodeAt(i);
         const blob = new Blob([bytes], { type: mimeType });
-        const file = new File([blob], 'storyforge_reference.png', { type: mimeType });
+        const file = new File([blob], fileName, { type: mimeType, lastModified: Date.now() });
 
         let result = '';
         let fileInputSet = false;
@@ -1002,10 +1078,11 @@ class _SeedanceWebScreenState extends State<SeedanceWebScreen> {
           const dt = new DataTransfer();
           dt.items.add(file);
           fileInput.files = dt.files;
-          fileInput.dispatchEvent(new Event('change', { bubbles: true }));
-          fileInput.dispatchEvent(new Event('input', { bubbles: true }));
+          dispatchUploadEvents(fileInput);
           result = 'file_input_direct: ' + fileInput.tagName;
           fileInputSet = true;
+          setTimeout(() => patchBrokenPreviews(dataUrl), 250);
+          setTimeout(() => patchBrokenPreviews(dataUrl), 900);
         }
 
         if (!fileInputSet) {
@@ -1019,7 +1096,8 @@ class _SeedanceWebScreenState extends State<SeedanceWebScreen> {
                 const dt2 = new DataTransfer();
                 dt2.items.add(file);
                 newInput.files = dt2.files;
-                newInput.dispatchEvent(new Event('change', { bubbles: true }));
+                dispatchUploadEvents(newInput);
+                patchBrokenPreviews(dataUrl);
               }
             }, 300);
           }
@@ -1036,6 +1114,7 @@ class _SeedanceWebScreenState extends State<SeedanceWebScreen> {
               p.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt }));
               p = p.parentElement;
             }
+            setTimeout(() => patchBrokenPreviews(dataUrl), 300);
             result += '; drop_zone_dispatched';
           }
         }
@@ -1051,7 +1130,7 @@ class _SeedanceWebScreenState extends State<SeedanceWebScreen> {
       final script = injectScript
           .replaceAll('%BASE64_DATA%', base64Only)
           .replaceAll('%MIME_TYPE%', mimeType)
-          .replaceAll('%FILE_NAME%', 'storyforge_reference.png');
+          .replaceAll('%FILE_NAME%', fileName);
       final result = await _controller.executeScript(script);
       setState(() {
         _injectingImage = false;
@@ -1082,9 +1161,15 @@ class _SeedanceWebScreenState extends State<SeedanceWebScreen> {
 
     final base64Only = base64Data.split(',').last;
     String mimeType = 'image/png';
+    String fileName = 'storyforge_ref.png';
     if (base64Data.startsWith('data:image/jpeg'))
       mimeType = 'image/jpeg';
     else if (base64Data.startsWith('data:image/webp')) mimeType = 'image/webp';
+    if (mimeType == 'image/jpeg') {
+      fileName = 'storyforge_ref.jpg';
+    } else if (mimeType == 'image/webp') {
+      fileName = 'storyforge_ref.webp';
+    }
 
     const injectScript = '''
     (function() {
@@ -1099,15 +1184,50 @@ class _SeedanceWebScreenState extends State<SeedanceWebScreen> {
         }
         return imageInputs;
       }
+      function dispatchUploadEvents(input) {
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+        input.dispatchEvent(new Event('blur', { bubbles: true }));
+        input.dispatchEvent(new Event('focusout', { bubbles: true }));
+      }
+      function patchBrokenPreviews(dataUrl) {
+        let patched = 0;
+        const imgs = Array.from(document.querySelectorAll('img'));
+        for (let i = imgs.length - 1; i >= 0; i--) {
+          const img = imgs[i];
+          const src = img.getAttribute('src') || '';
+          const alt = (img.getAttribute('alt') || '').toLowerCase();
+          const rect = img.getBoundingClientRect();
+          const looksLikePreview =
+            alt.includes('preview') ||
+            src === '' ||
+            src === '#' ||
+            src === 'null' ||
+            src === 'undefined' ||
+            img.naturalWidth === 0 ||
+            rect.width >= 40 && rect.height >= 40;
+          if (!looksLikePreview) continue;
+          if (img.complete && img.naturalWidth > 0 && src) continue;
+          img.src = dataUrl;
+          img.style.objectFit = 'cover';
+          img.style.width = '100%';
+          img.style.height = '100%';
+          patched++;
+          break;
+        }
+        return patched;
+      }
       try {
         const base64 = '%BASE64_DATA%';
         const mimeType = '%MIME_TYPE%';
+        const fileName = '%FILE_NAME%';
+        const dataUrl = 'data:' + mimeType + ';base64,' + base64;
         const binaryString = atob(base64);
         const len = binaryString.length;
         const bytes = new Uint8Array(len);
         for (let i = 0; i < len; i++) bytes[i] = binaryString.charCodeAt(i);
         const blob = new Blob([bytes], { type: mimeType });
-        const file = new File([blob], 'storyforge_ref.png', { type: mimeType });
+        const file = new File([blob], fileName, { type: mimeType, lastModified: Date.now() });
 
         const inputs = findFileInputs();
         if (inputs.length > 1) {
@@ -1118,9 +1238,9 @@ class _SeedanceWebScreenState extends State<SeedanceWebScreen> {
             const dt = new DataTransfer();
             dt.items.add(file);
             input.files = dt.files;
-            input.dispatchEvent(new Event('change', { bubbles: true }));
-            input.dispatchEvent(new Event('input', { bubbles: true }));
+            dispatchUploadEvents(input);
             injected = true;
+            setTimeout(() => patchBrokenPreviews(dataUrl), 250);
             break;
           }
           if (injected) return 'additional_image_injected';
@@ -1129,8 +1249,8 @@ class _SeedanceWebScreenState extends State<SeedanceWebScreen> {
           const dt = new DataTransfer();
           dt.items.add(file);
           lastInput.files = dt.files;
-          lastInput.dispatchEvent(new Event('change', { bubbles: true }));
-          lastInput.dispatchEvent(new Event('input', { bubbles: true }));
+          dispatchUploadEvents(lastInput);
+          setTimeout(() => patchBrokenPreviews(dataUrl), 250);
           return 'additional_image_injected_last_slot';
         }
         // Fallback: click add/upload button to reveal more slots
@@ -1146,8 +1266,8 @@ class _SeedanceWebScreenState extends State<SeedanceWebScreen> {
                   const dt = new DataTransfer();
                   dt.items.add(file);
                   input.files = dt.files;
-                  input.dispatchEvent(new Event('change', { bubbles: true }));
-                  input.dispatchEvent(new Event('input', { bubbles: true }));
+                  dispatchUploadEvents(input);
+                  patchBrokenPreviews(dataUrl);
                   break;
                 }
               }
@@ -1165,7 +1285,8 @@ class _SeedanceWebScreenState extends State<SeedanceWebScreen> {
     try {
       final script = injectScript
           .replaceAll('%BASE64_DATA%', base64Only)
-          .replaceAll('%MIME_TYPE%', mimeType);
+          .replaceAll('%MIME_TYPE%', mimeType)
+          .replaceAll('%FILE_NAME%', fileName);
       await _controller.executeScript(script);
     } catch (e) {
       debugPrint('Additional image injection failed: $e');
@@ -1893,7 +2014,14 @@ class _SeedanceWebScreenState extends State<SeedanceWebScreen> {
   Future<void> _approveAndNext() async {
     final item = widget.batchStoryboards![_interactiveCurrentIndex];
     if (_interactiveVideoUrl != null) {
+      final localPath = await _persistExtractedVideo(
+        _interactiveVideoUrl!,
+        storyboardId: item.storyboardId,
+      );
       _batchResults[item.storyboardId] = _interactiveVideoUrl!;
+      if (localPath != null) {
+        _batchLocalPaths[item.storyboardId] = localPath;
+      }
     }
     await _saveBatchState();
 
@@ -1955,8 +2083,16 @@ class _SeedanceWebScreenState extends State<SeedanceWebScreen> {
     });
 
     if (videoUrl != null) {
-      _batchResults[widget
-          .batchStoryboards![_interactiveCurrentIndex].storyboardId] = videoUrl;
+      final storyboardId =
+          widget.batchStoryboards![_interactiveCurrentIndex].storyboardId;
+      final localPath = await _persistExtractedVideo(
+        videoUrl,
+        storyboardId: storyboardId,
+      );
+      _batchResults[storyboardId] = videoUrl;
+      if (localPath != null) {
+        _batchLocalPaths[storyboardId] = localPath;
+      }
       await _saveBatchState();
 
       final nextIndex = _interactiveCurrentIndex + 1;
@@ -2223,7 +2359,14 @@ class _SeedanceWebScreenState extends State<SeedanceWebScreen> {
         final videoUrl = await _processSingleStoryboard(item);
 
         if (videoUrl != null) {
+          final localPath = await _persistExtractedVideo(
+            videoUrl,
+            storyboardId: item.storyboardId,
+          );
           _batchResults[item.storyboardId] = videoUrl;
+          if (localPath != null) {
+            _batchLocalPaths[item.storyboardId] = localPath;
+          }
           setState(() {
             _statusMessage =
                 '[${i + 1}/${widget.batchStoryboards!.length}] ✓ 视频生成完成';
@@ -2314,6 +2457,10 @@ class _SeedanceWebScreenState extends State<SeedanceWebScreen> {
       if (_batchResults.isNotEmpty) {
         await prefs.setString(_prefBatchResults, jsonEncode(_batchResults));
       }
+      if (_batchLocalPaths.isNotEmpty) {
+        await prefs.setString(
+            _prefBatchLocalPaths, jsonEncode(_batchLocalPaths));
+      }
       if (_batchErrors.isNotEmpty) {
         await prefs.setString(_prefBatchErrors, jsonEncode(_batchErrors));
       }
@@ -2347,6 +2494,14 @@ class _SeedanceWebScreenState extends State<SeedanceWebScreen> {
         final results = jsonDecode(resultsStr) as Map<String, dynamic>;
         for (final entry in results.entries) {
           _batchResults[entry.key] = entry.value as String;
+        }
+      }
+
+      final localPathsStr = prefs.getString(_prefBatchLocalPaths);
+      if (localPathsStr != null) {
+        final localPaths = jsonDecode(localPathsStr) as Map<String, dynamic>;
+        for (final entry in localPaths.entries) {
+          _batchLocalPaths[entry.key] = entry.value as String;
         }
       }
 
@@ -2454,7 +2609,14 @@ class _SeedanceWebScreenState extends State<SeedanceWebScreen> {
         final videoUrl = await _processSingleStoryboard(item);
 
         if (videoUrl != null) {
+          final localPath = await _persistExtractedVideo(
+            videoUrl,
+            storyboardId: item.storyboardId,
+          );
           _batchResults[item.storyboardId] = videoUrl;
+          if (localPath != null) {
+            _batchLocalPaths[item.storyboardId] = localPath;
+          }
           setState(() {
             _statusMessage =
                 '[${i + 1}/${widget.batchStoryboards!.length}] ✓ 视频生成完成';
@@ -2509,6 +2671,7 @@ class _SeedanceWebScreenState extends State<SeedanceWebScreen> {
       final prefs = await SharedPreferences.getInstance();
       await prefs.remove(_prefBatchState);
       await prefs.remove(_prefBatchResults);
+      await prefs.remove(_prefBatchLocalPaths);
       await prefs.remove(_prefBatchErrors);
       setState(() => _hasSavedState = false);
     } catch (e) {

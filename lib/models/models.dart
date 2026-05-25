@@ -351,6 +351,7 @@ class VideoClip {
   final String projectId;
   final String storyboardId;
   final String? videoUrl;
+  final String? videoLocalPath;
   final String state;
   final bool isSelected;
   final String? errorReason;
@@ -362,6 +363,7 @@ class VideoClip {
     required this.projectId,
     required this.storyboardId,
     this.videoUrl,
+    this.videoLocalPath,
     this.state = 'generating',
     this.isSelected = false,
     this.errorReason,
@@ -375,6 +377,7 @@ class VideoClip {
       projectId: map['project_id'] as String,
       storyboardId: map['storyboard_id'] as String,
       videoUrl: map['video_url'] as String?,
+      videoLocalPath: map['video_local_path'] as String?,
       state: map['state'] as String? ?? 'generating',
       isSelected: (map['is_selected'] as int? ?? 0) != 0,
       errorReason: map['error_reason'] as String?,
@@ -389,6 +392,7 @@ class VideoClip {
       'project_id': projectId,
       'storyboard_id': storyboardId,
       'video_url': videoUrl,
+      'video_local_path': videoLocalPath,
       'state': state,
       'is_selected': isSelected ? 1 : 0,
       'error_reason': errorReason,

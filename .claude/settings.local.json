@@ -31,7 +31,9 @@
       "Bash(taskkill *)",
       "Bash(cmd.exe /c \"taskkill /F /IM storyforge_app.exe\")",
       "Bash(C:\\\\Windows\\\\System32\\\\taskkill.exe *)",
-      "Bash(powershell *)"
+      "Bash(powershell *)",
+      "Bash(git add *)",
+      "Bash(git commit *)"
     ]
   }
 }

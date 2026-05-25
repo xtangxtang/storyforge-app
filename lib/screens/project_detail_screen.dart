@@ -4,7 +4,10 @@ import '../db/dao/dao.dart';
 import '../models/models.dart';
 import '../services/dashscope_service.dart';
 import '../services/app_logger.dart';
+import '../services/llm_service.dart';
 import '../services/persistent_image_store.dart';
+import '../services/project_wiki_store.dart';
+import '../services/wiki_mutation_service.dart';
 import '../widgets/persistent_image.dart';
 import 'create_project_screen.dart';
 import 'seedance_web_screen.dart';
@@ -34,6 +37,11 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
   bool _imageGenerating = false;
   // storyboardId -> image URL
   final Map<String, String> _confirmedImages = {};
+  final _llm = LlmService();
+  late final _wiki = WikiMutationService(
+    store: ProjectWikiStore(),
+    llm: _llm,
+  );
   final Map<String, String> _retryFeedback = {};
   bool _allImagesConfirmed = false;
 
@@ -41,6 +49,12 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
   void initState() {
     super.initState();
     _loadData();
+  }
+
+  @override
+  void dispose() {
+    _llm.dispose();
+    super.dispose();
   }
 
   Future<void> _loadData() async {
@@ -287,6 +301,10 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
         );
       }
     }
+    await _wiki.updateStoryboards(
+      projectId: widget.project.id,
+      storyboards: _storyboards,
+    );
 
     if (!mounted) return;
 
@@ -383,6 +401,10 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
           referenceImageUrls: current.referenceImageUrls,
         );
       }
+      await _wiki.updateStoryboards(
+        projectId: widget.project.id,
+        storyboards: _storyboards,
+      );
 
       setState(() {
         _currentImageUrl = imageUrl;
@@ -597,7 +619,7 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
     final item = SeedanceStoryboardItem(
       storyboardId: sb.id,
       imageUrl: imageUrl,
-      prompt: sb.videoPrompt,
+      prompt: _buildSeedanceContinuityPrompt(sb),
       firstFramePrompt: sb.firstFramePrompt,
       description: sb.description ?? '',
       sceneNum: sb.sceneNum,
@@ -608,7 +630,10 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
     final result = await Navigator.push<Map<String, String>>(
       context,
       MaterialPageRoute(
-        builder: (_) => SeedanceWebScreen(batchStoryboards: [item]),
+        builder: (_) => SeedanceWebScreen(
+          batchStoryboards: [item],
+          projectId: widget.project.id,
+        ),
       ),
     );
 
@@ -618,6 +643,45 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
       await _saveSeedanceVideoClip(sb.id, videoUrl);
       if (mounted) _loadData();
     }
+  }
+
+  String _buildSeedanceContinuityPrompt(Storyboard storyboard) {
+    final sorted = [..._storyboards]..sort((a, b) {
+        if (a.sceneNum != b.sceneNum) return a.sceneNum - b.sceneNum;
+        return a.shotNum - b.shotNum;
+      });
+    final index = sorted.indexWhere((s) => s.id == storyboard.id);
+    final previous = index > 0 ? sorted[index - 1] : null;
+    final next =
+        index >= 0 && index + 1 < sorted.length ? sorted[index + 1] : null;
+    final previousSameScene =
+        previous != null && previous.sceneNum == storyboard.sceneNum;
+    final nextSameScene = next != null && next.sceneNum == storyboard.sceneNum;
+
+    final buffer = StringBuffer()
+      ..writeln(storyboard.videoPrompt ?? '')
+      ..writeln()
+      ..writeln('【连续性约束，必须优先遵守】')
+      ..writeln('当前镜头：Scene ${storyboard.sceneNum} Shot ${storyboard.shotNum}')
+      ..writeln('当前镜头画面：${storyboard.description ?? ''}');
+    if (previousSameScene) {
+      buffer
+        ..writeln('上一镜头画面：${previous.description ?? ''}')
+        ..writeln('上一镜头动态：${previous.videoPrompt ?? ''}')
+        ..writeln('本镜头首帧必须承接上一镜头结尾的人物位置、朝向、运动方向和场景方位。');
+    } else {
+      buffer.writeln('这是该场景第一个镜头，需要建立清楚的场景方位和人物运动方向。');
+    }
+    if (nextSameScene) {
+      buffer
+        ..writeln('下一镜头画面：${next.description ?? ''}')
+        ..writeln('下一镜头动态：${next.videoPrompt ?? ''}')
+        ..writeln('本镜头结尾必须为下一镜头留下合理衔接，不要让人物突然反向或瞬移。');
+    }
+    buffer
+      ..writeln('硬性要求：保持同一人物、同一服装、同一道具、同一校门/教室空间关系。')
+      ..writeln('明确表现“起始状态 -> 动作过程 -> 结束状态”；除非明确写出转身/回头，否则不得改变运动方向。');
+    return buffer.toString();
   }
 
   /// Generate video for a single storyboard through the configured DashScope API.
@@ -703,15 +767,26 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
     final clipId =
         'clip_seedance_${DateTime.now().millisecondsSinceEpoch.toString().substring(6)}_$storyboardId';
     try {
+      final localPath = await _wiki.persistVideoFile(
+        projectId: widget.project.id,
+        videoUrl: videoUrl,
+        storyboardId: storyboardId,
+      );
       final clip = VideoClip(
         id: clipId,
         projectId: widget.project.id,
         storyboardId: storyboardId,
         videoUrl: videoUrl,
+        videoLocalPath: localPath,
         state: 'completed',
         createdAt: DateTime.now().millisecondsSinceEpoch,
       );
       await VideoClipDao().insert(clip);
+      final clips = await VideoClipDao().getByProjectId(widget.project.id);
+      await _wiki.updateVideoClips(
+        projectId: widget.project.id,
+        videoData: {'clips': clips.map((c) => c.toMap()).toList()},
+      );
     } catch (e) {
       await AppLogger.warn(
         'Failed to save Seedance video clip',
@@ -757,7 +832,7 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
       batchItems.add(SeedanceStoryboardItem(
         storyboardId: sb.id,
         imageUrl: imageUrl,
-        prompt: sb.videoPrompt,
+        prompt: _buildSeedanceContinuityPrompt(sb),
         firstFramePrompt: sb.firstFramePrompt,
         description: sb.description ?? '',
         sceneNum: sb.sceneNum,
@@ -784,7 +859,10 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
     final result = await Navigator.push<Map<String, String>>(
       context,
       MaterialPageRoute(
-        builder: (_) => SeedanceWebScreen(batchStoryboards: batchItems),
+        builder: (_) => SeedanceWebScreen(
+          batchStoryboards: batchItems,
+          projectId: widget.project.id,
+        ),
       ),
     );
 
@@ -880,6 +958,11 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
       setState(() => _genStatus = '生成失败: $e');
     } finally {
       setState(() => _generating = false);
+      final clips = await VideoClipDao().getByProjectId(widget.project.id);
+      await _wiki.updateVideoClips(
+        projectId: widget.project.id,
+        videoData: {'clips': clips.map((c) => c.toMap()).toList()},
+      );
       await _loadData();
     }
   }
@@ -936,6 +1019,11 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
       setState(() => _genStatus = '重试失败: $e');
     } finally {
       setState(() => _generating = false);
+      final clips = await VideoClipDao().getByProjectId(widget.project.id);
+      await _wiki.updateVideoClips(
+        projectId: widget.project.id,
+        videoData: {'clips': clips.map((c) => c.toMap()).toList()},
+      );
       await _loadData();
     }
   }
@@ -1013,6 +1101,10 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
               );
             }
             imageUrl = img;
+            await _wiki.updateStoryboards(
+              projectId: widget.project.id,
+              storyboards: _storyboards,
+            );
           } catch (e) {
             await AppLogger.warn('Failed to generate image for retry',
                 data: {'storyboard_id': sb.id});
@@ -1065,6 +1157,11 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
       setState(() => _genStatus = '生成失败: $e');
     } finally {
       setState(() => _generating = false);
+      final clips = await VideoClipDao().getByProjectId(widget.project.id);
+      await _wiki.updateVideoClips(
+        projectId: widget.project.id,
+        videoData: {'clips': clips.map((c) => c.toMap()).toList()},
+      );
       await _loadData();
     }
   }

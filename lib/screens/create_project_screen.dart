@@ -14,6 +14,7 @@ import '../services/dashscope_service.dart' as dashscope;
 import '../services/app_logger.dart';
 import '../services/persistent_image_store.dart';
 import '../services/project_wiki_store.dart';
+import '../services/wiki_mutation_service.dart';
 import '../widgets/persistent_image.dart';
 import 'project_detail_screen.dart';
 import 'seedance_web_screen.dart';
@@ -29,9 +30,9 @@ class CreateProjectScreen extends StatefulWidget {
 class _CreateProjectScreenState extends State<CreateProjectScreen> {
   final _promptController = TextEditingController();
   final _guidanceController = TextEditingController();
-  final _stageGuidanceController = TextEditingController();
   final _projectDao = ProjectDao();
   final _wikiStore = ProjectWikiStore();
+  late WikiMutationService _wiki;
   late LlmService _llm;
 
   String? _projectId;
@@ -82,6 +83,7 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
   final Map<int, bool> _stageGuidanceApproved = {};
   final Map<int, List<DirectorGuidanceQuestion>> _stageGuidanceQuestions = {};
   final Map<int, String> _stageGuidanceInputs = {};
+  final Map<String, TextEditingController> _stageGuidanceControllers = {};
 
   // Storyboard generation settings
   double _storyboardTemperature = 0.3;
@@ -94,6 +96,7 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
   void initState() {
     super.initState();
     _llm = LlmService();
+    _wiki = WikiMutationService(store: _wikiStore, llm: _llm);
     if (widget.resumeProject != null) {
       _isResuming = true;
       _projectId = widget.resumeProject!.id;
@@ -296,12 +299,12 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
     }
     _promptController.text = prompt;
 
-    await _wikiStore.initializeProject(projectId: pid, creativeInput: prompt);
+    await _wiki.initializeProject(projectId: pid, creativeInput: prompt);
     if (brief != null) {
-      await _wikiStore.updateBrief(projectId: pid, brief: brief.toMap());
+      await _wiki.updateBrief(projectId: pid, brief: brief.toMap());
     }
     if (script != null) {
-      await _wikiStore.updateScript(
+      await _wiki.updateScript(
         projectId: pid,
         scriptData: {
           'scenes': sceneObjects,
@@ -310,19 +313,18 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
       );
     }
     if (assets.isNotEmpty) {
-      await _wikiStore.updateAssets(projectId: pid, assets: assets);
+      await _wiki.updateAssets(projectId: pid, assets: assets);
     }
     if (storyboards.isNotEmpty) {
-      await _wikiStore.updateStoryboards(
-          projectId: pid, storyboards: storyboards);
+      await _wiki.updateStoryboards(projectId: pid, storyboards: storyboards);
     }
     if (videoClips.isNotEmpty) {
-      await _wikiStore.updateVideoClips(
+      await _wiki.updateVideoClips(
         projectId: pid,
         videoData: {'clips': videoClips.map((c) => c.toMap()).toList()},
       );
     }
-    _agentCtx!.data['creative_memory'] = await _wikiStore.compileContextPack(
+    _agentCtx!.data['creative_memory'] = await _wiki.compileContextPack(
       pid,
       stage: startStage >= _stageDefs.length
           ? 'done'
@@ -479,16 +481,16 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
       updatedAt: DateTime.now().millisecondsSinceEpoch,
     );
     await _projectDao.insert(project);
-    await _wikiStore.initializeProject(
+    await _wiki.initializeProject(
       projectId: projectId,
       creativeInput: _promptController.text.trim(),
     );
-    await _wikiStore.updateOpenQuestions(
+    await _wiki.updateOpenQuestions(
       projectId: projectId,
       questions: _guidanceQuestionMaps(),
     );
     final directorGuidance = _buildDirectorGuidanceText();
-    await _wikiStore.updateUserAnswers(
+    await _wiki.updateUserAnswers(
       projectId: projectId,
       guidanceText: directorGuidance,
     );
@@ -500,7 +502,7 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
         'prompt': _promptController.text.trim(),
         'director_guidance': directorGuidance,
         'creative_memory':
-            await _wikiStore.compileContextPack(projectId, stage: 'planning'),
+            await _wiki.compileContextPack(projectId, stage: 'planning'),
         'currentStage': 'planning',
       },
     );
@@ -509,6 +511,13 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
       _creating = true;
       _currentStageIndex = 0;
       _stages.clear();
+      _stageGuidanceApproved.clear();
+      _stageGuidanceQuestions.clear();
+      _stageGuidanceInputs.clear();
+      for (final controller in _stageGuidanceControllers.values) {
+        controller.dispose();
+      }
+      _stageGuidanceControllers.clear();
     });
 
     await _runCurrentStage();
@@ -603,6 +612,7 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
               'title': question.title,
               'question': question.question,
               'hint': question.hint,
+              'default_answer': question.defaultAnswer,
               'required': question.required,
             })
         .toList();
@@ -611,7 +621,7 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
   Future<void> _refreshCreativeMemory(String stage) async {
     if (_projectId == null || _agentCtx == null) return;
     _agentCtx!.data['creative_memory'] =
-        await _wikiStore.compileContextPack(_projectId!, stage: stage);
+        await _wiki.compileContextPack(_projectId!, stage: stage);
   }
 
   Future<bool> _ensureStageGuidance(StageProgress stage) async {
@@ -621,7 +631,7 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
 
     final workflowStage = _stageIndexToWorkflowStage(_currentStageIndex);
     final wikiContext =
-        await _wikiStore.compileContextPack(_projectId!, stage: workflowStage);
+        await _wiki.compileContextPack(_projectId!, stage: workflowStage);
 
     setState(() {
       stage.status = 'needs_input';
@@ -643,8 +653,7 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
         : questions;
 
     _stageGuidanceQuestions[_currentStageIndex] = effectiveQuestions;
-    _stageGuidanceController.text =
-        _stageGuidanceInputs[_currentStageIndex] ?? '';
+    _prepareStageGuidanceControllers(_currentStageIndex, effectiveQuestions);
     stage.contentPreview = _formatStageGuidanceQuestions(effectiveQuestions);
     stage.feedback = '进入「${stage.label}」前，请先查看 DirectorAgent 的建议/追问。';
     setState(() {});
@@ -668,6 +677,7 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
       question: detail,
       hint: '如果没有补充，请输入“确认，无补充”。',
       required: true,
+      defaultAnswer: '确认，无补充。',
     );
   }
 
@@ -687,31 +697,113 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
     return lines.join('\n').trim();
   }
 
+  void _prepareStageGuidanceControllers(
+    int stageIndex,
+    List<DirectorGuidanceQuestion> questions,
+  ) {
+    final existingSummary = _stageGuidanceInputs[stageIndex];
+    for (final question in questions) {
+      final key = _stageGuidanceControllerKey(stageIndex, question.id);
+      final controller = _stageGuidanceControllers.putIfAbsent(
+        key,
+        () => TextEditingController(),
+      );
+      if (controller.text.trim().isEmpty) {
+        final restored = _restoreStageAnswer(existingSummary, question.id);
+        controller.text = restored ??
+            (question.defaultAnswer.trim().isNotEmpty
+                ? question.defaultAnswer.trim()
+                : (question.required ? '确认，无补充。' : ''));
+      }
+    }
+  }
+
+  String _stageGuidanceControllerKey(int stageIndex, String questionId) =>
+      '$stageIndex::$questionId';
+
+  String? _restoreStageAnswer(String? summary, String questionId) {
+    if (summary == null || summary.trim().isEmpty) return null;
+    final marker = '- id: `$questionId`';
+    final start = summary.indexOf(marker);
+    if (start == -1) return null;
+    final answerMarker = '- answer: ';
+    final answerStart = summary.indexOf(answerMarker, start);
+    if (answerStart == -1) return null;
+    final lineEnd = summary.indexOf('\n', answerStart);
+    final raw = summary.substring(
+      answerStart + answerMarker.length,
+      lineEnd == -1 ? summary.length : lineEnd,
+    );
+    final answer = raw.trim();
+    return answer.isEmpty ? null : answer;
+  }
+
+  void _clearStageGuidanceState(int stageIndex) {
+    _stageGuidanceApproved.remove(stageIndex);
+    _stageGuidanceQuestions.remove(stageIndex);
+    _stageGuidanceInputs.remove(stageIndex);
+    final prefix = '$stageIndex::';
+    final keys = _stageGuidanceControllers.keys
+        .where((key) => key.startsWith(prefix))
+        .toList();
+    for (final key in keys) {
+      _stageGuidanceControllers.remove(key)?.dispose();
+    }
+  }
+
+  String _buildStageGuidanceAnswerText(int stageIndex) {
+    final questions = _stageGuidanceQuestions[stageIndex] ?? const [];
+    final label = stageIndex < _stageDefs.length
+        ? _stageDefs[stageIndex].label
+        : '阶段 $stageIndex';
+    final buffer = StringBuffer()..writeln('## 阶段前确认 - $label');
+    for (final question in questions) {
+      final key = _stageGuidanceControllerKey(stageIndex, question.id);
+      final answer = _stageGuidanceControllers[key]?.text.trim() ?? '';
+      buffer
+        ..writeln()
+        ..writeln('- id: `${question.id}`')
+        ..writeln('- title: ${question.title}')
+        ..writeln('- required: ${question.required}')
+        ..writeln('- question: ${question.question}')
+        ..writeln('- hint: ${question.hint}')
+        ..writeln('- default_answer: ${question.defaultAnswer}')
+        ..writeln('- answer: $answer');
+    }
+    return buffer.toString().trim();
+  }
+
   Future<void> _confirmStageGuidanceAndRun() async {
-    final input = _stageGuidanceController.text.trim();
     final questions = _stageGuidanceQuestions[_currentStageIndex] ?? const [];
-    final hasRequiredQuestion = questions.any((q) => q.required);
-    if (hasRequiredQuestion && input.isEmpty) {
+    final missingRequired = questions.where((question) {
+      if (!question.required) return false;
+      final key = _stageGuidanceControllerKey(_currentStageIndex, question.id);
+      return (_stageGuidanceControllers[key]?.text.trim() ?? '').isEmpty;
+    }).toList();
+    if (missingRequired.isNotEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('当前阶段有必填追问，请输入你的确认或补充')),
+        SnackBar(
+          content: Text('还有 ${missingRequired.length} 个必填追问未确认'),
+        ),
       );
       return;
     }
 
+    final input = _buildStageGuidanceAnswerText(_currentStageIndex);
     _stageGuidanceInputs[_currentStageIndex] = input;
     _stageGuidanceApproved[_currentStageIndex] = true;
     final currentStage = _stages[_currentStageIndex];
     currentStage.messages.add(_ProgressMessage(
       type: 'success',
-      text: input.isEmpty ? '已确认阶段前建议，继续生成。' : '已保存阶段前补充，继续生成。',
+      text: '已保存阶段前确认，继续生成。',
     ));
 
     if (_projectId != null) {
-      await _wikiStore.updateUserAnswers(
+      await _wiki.updateUserAnswers(
         projectId: _projectId!,
         guidanceText: _buildDirectorGuidanceText(),
       );
-      await _wikiStore.appendLog(
+      await _wiki.appendLog(
         _projectId!,
         'Confirmed stage preflight guidance',
         data: {
@@ -809,7 +901,7 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
                 'story_outline': brief.storyOutline,
                 'visual_style': brief.visualStyle,
               };
-              await _wikiStore.updateBrief(
+              await _wiki.updateBrief(
                 projectId: _projectId!,
                 brief: briefData,
               );
@@ -855,7 +947,7 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
             stage.finalData = scriptData;
             // Inject script into context so ProductionAgent can use it
             _agentCtx!.data['script'] = scriptData;
-            await _wikiStore.updateScript(
+            await _wiki.updateScript(
               projectId: _projectId!,
               scriptData: scriptData,
             );
@@ -913,7 +1005,7 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
             }
             stage.finalData = assetData;
             if (rawAssets is List) {
-              await _wikiStore.updateAssets(
+              await _wiki.updateAssets(
                 projectId: _projectId!,
                 assets: rawAssets,
               );
@@ -1039,7 +1131,7 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
 
             stage.finalData = storyboardData;
             if (storyboards != null) {
-              await _wikiStore.updateStoryboards(
+              await _wiki.updateStoryboards(
                 projectId: _projectId!,
                 storyboards: storyboards,
               );
@@ -1056,7 +1148,7 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
             result = await _runApiVideoStage(stage);
           }
           if (result.success && result.data != null) {
-            await _wikiStore.updateVideoClips(
+            await _wiki.updateVideoClips(
               projectId: _projectId!,
               videoData: result.data as Map<String, dynamic>,
             );
@@ -1210,11 +1302,23 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
       if (clips != null && stage.finalData == null) {
         for (final clipMap in clips) {
           if (clipMap is Map<String, dynamic>) {
+            final videoUrl = clipMap['video_url'] as String?;
+            String? localPath;
+            if (videoUrl != null && videoUrl.isNotEmpty) {
+              localPath = await _wiki.persistVideoFile(
+                projectId: _projectId!,
+                videoUrl: videoUrl,
+                storyboardId: clipMap['storyboard_id'] as String?,
+              );
+              clipMap['local_path'] = localPath;
+              clipMap['video_local_path'] = localPath;
+            }
             final clip = VideoClip(
               id: 'clip_${clipMap['storyboard_id'] ?? const Uuid().v4().substring(0, 8)}',
               projectId: _projectId!,
               storyboardId: clipMap['storyboard_id'] as String? ?? '',
-              videoUrl: clipMap['video_url'] as String?,
+              videoUrl: videoUrl,
+              videoLocalPath: localPath,
               state: clipMap['state'] as String? ?? 'generating',
               errorReason: clipMap['error_reason'] as String?,
               createdAt: DateTime.now().millisecondsSinceEpoch,
@@ -1341,7 +1445,10 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
       batchItems.add(SeedanceStoryboardItem(
         storyboardId: sb.id,
         imageUrl: imageUrl,
-        prompt: sb.videoPrompt,
+        prompt: _buildSeedanceContinuityPrompt(
+          storyboard: sb,
+          storyboards: storyboards,
+        ),
         firstFramePrompt: sb.firstFramePrompt,
         description: sb.description ?? '',
         sceneNum: sb.sceneNum,
@@ -1361,18 +1468,27 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
       final result = await Navigator.push<Map<String, String>>(
         context,
         MaterialPageRoute(
-          builder: (_) => SeedanceWebScreen(batchStoryboards: batchItems),
+          builder: (_) => SeedanceWebScreen(
+            batchStoryboards: batchItems,
+            projectId: _projectId,
+          ),
         ),
       );
 
       for (final sb in storyboards) {
         final videoUrl = result?[sb.id];
         if (videoUrl != null && videoUrl.isNotEmpty) {
+          final localPath = await _wiki.persistVideoFile(
+            projectId: _projectId!,
+            videoUrl: videoUrl,
+            storyboardId: sb.id,
+          );
           final clip = VideoClip(
             id: 'clip_seedance_${const Uuid().v4().substring(0, 8)}',
             projectId: _projectId!,
             storyboardId: sb.id,
             videoUrl: videoUrl,
+            videoLocalPath: localPath,
             state: 'completed',
             createdAt: DateTime.now().millisecondsSinceEpoch,
           );
@@ -1380,6 +1496,7 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
           clips.add({
             'storyboard_id': sb.id,
             'video_url': videoUrl,
+            'local_path': localPath,
             'state': 'completed',
           });
           successCount++;
@@ -1406,6 +1523,48 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
     return AgentResult.success(videoData);
   }
 
+  String _buildSeedanceContinuityPrompt({
+    required Storyboard storyboard,
+    required List<Storyboard> storyboards,
+  }) {
+    final sorted = [...storyboards]..sort((a, b) {
+        if (a.sceneNum != b.sceneNum) return a.sceneNum - b.sceneNum;
+        return a.shotNum - b.shotNum;
+      });
+    final index = sorted.indexWhere((s) => s.id == storyboard.id);
+    final previous = index > 0 ? sorted[index - 1] : null;
+    final next =
+        index >= 0 && index + 1 < sorted.length ? sorted[index + 1] : null;
+    final previousSameScene =
+        previous != null && previous.sceneNum == storyboard.sceneNum;
+    final nextSameScene = next != null && next.sceneNum == storyboard.sceneNum;
+
+    final buffer = StringBuffer()
+      ..writeln(storyboard.videoPrompt ?? '')
+      ..writeln()
+      ..writeln('【连续性约束，必须优先遵守】')
+      ..writeln('当前镜头：Scene ${storyboard.sceneNum} Shot ${storyboard.shotNum}')
+      ..writeln('当前镜头画面：${storyboard.description ?? ''}');
+    if (previousSameScene) {
+      buffer
+        ..writeln('上一镜头画面：${previous.description ?? ''}')
+        ..writeln('上一镜头动态：${previous.videoPrompt ?? ''}')
+        ..writeln('本镜头首帧必须承接上一镜头结尾的人物位置、朝向、运动方向和场景方位。');
+    } else {
+      buffer.writeln('这是该场景第一个镜头，需要建立清楚的场景方位和人物运动方向。');
+    }
+    if (nextSameScene) {
+      buffer
+        ..writeln('下一镜头画面：${next.description ?? ''}')
+        ..writeln('下一镜头动态：${next.videoPrompt ?? ''}')
+        ..writeln('本镜头结尾必须为下一镜头留下合理衔接，不要让人物突然反向或瞬移。');
+    }
+    buffer
+      ..writeln('硬性要求：保持同一人物、同一服装、同一道具、同一校门/教室空间关系。')
+      ..writeln('明确表现“起始状态 -> 动作过程 -> 结束状态”；除非明确写出转身/回头，否则不得改变运动方向。');
+    return buffer.toString();
+  }
+
   /// Move to next stage
   Future<void> _approveAndContinue() async {
     _userFeedback = '';
@@ -1422,6 +1581,7 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
       return;
     }
     final currentStage = _stages[_currentStageIndex];
+    _clearStageGuidanceState(_currentStageIndex);
     currentStage.status = 'running';
     currentStage.messages
         .add(_ProgressMessage(type: 'warn', text: '--- 根据反馈重新生成 ---'));
@@ -1671,11 +1831,16 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
             final sbId = c['storyboard_id'] ?? '?';
             final state = c['state'] as String?;
             final videoUrl = c['video_url'] as String?;
+            final localPath =
+                c['local_path'] as String? ?? c['video_local_path'] as String?;
             final refUrl = c['reference_image_url'] as String?;
             if ((state == 'completed' || state == 'done') && videoUrl != null) {
               lines.add('━━ 镜头 $sbId ━━');
               lines.add('参考图: ${refUrl ?? "无"}');
               lines.add('视频: ${_truncateText(videoUrl, 60)}');
+              if (localPath != null && localPath.isNotEmpty) {
+                lines.add('本地文件: ${_truncateText(localPath, 80)}');
+              }
               lines.add('');
               clipSuccess++;
             } else {
@@ -2342,7 +2507,7 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
       buffer.write('修改意见：$feedback');
     }
 
-    final enhancedPrompt = buffer.toString();
+    final enhancedPrompt = _cleanAssetImagePrompt(buffer.toString());
 
     final typeLabel =
         type == 'character' ? '角色' : (type == 'prop' ? '道具' : '场景');
@@ -2437,6 +2602,9 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
         imageUrl: imageUrl,
         localPath: localPath,
       );
+      if (_projectId != null) {
+        await _wiki.updateAssets(projectId: _projectId!, assets: rawAssets);
+      }
 
       stage.messages.add(
           _ProgressMessage(type: 'success', text: '$typeLabel: $name 重新生成完成'));
@@ -2453,6 +2621,19 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
     PaintingBinding.instance.imageCache.clearLiveImages();
 
     setState(() {});
+  }
+
+  String _cleanAssetImagePrompt(String value, {int maxLength = 1400}) {
+    var text = value
+        .replaceAll(RegExp(r'---[\s\S]*?---'), ' ')
+        .replaceAll(RegExp(r'#.+'), ' ')
+        .replaceAll(RegExp(r'https?://\S+'), ' ')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+    if (text.length > maxLength) {
+      text = text.substring(0, maxLength);
+    }
+    return text;
   }
 
   /// Show dialog that displays current asset description and allows editing.
@@ -2811,6 +2992,7 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
             const SizedBox(height: 12),
             FilledButton.icon(
               onPressed: () {
+                _clearStageGuidanceState(_currentStageIndex);
                 currentStage?.status = 'running';
                 currentStage?.messages
                     .add(_ProgressMessage(type: 'warn', text: '--- 重新生成 ---'));
@@ -2833,27 +3015,43 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
               ),
             ),
             const SizedBox(height: 8),
-            TextField(
-              controller: _stageGuidanceController,
-              maxLines: 3,
-              decoration: InputDecoration(
-                hintText:
-                    (_stageGuidanceQuestions[_currentStageIndex] ?? const [])
-                            .any((q) => q.required)
-                        ? '必填：请输入你的确认或补充；没有补充可写“确认，无补充”'
-                        : '可选：输入你的判断、补充或修改要求；留空则表示确认建议并继续',
-                border: const OutlineInputBorder(),
-                contentPadding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-              ),
-            ),
+            ...(_stageGuidanceQuestions[_currentStageIndex] ?? const [])
+                .map((question) {
+              final key =
+                  _stageGuidanceControllerKey(_currentStageIndex, question.id);
+              final controller = _stageGuidanceControllers.putIfAbsent(
+                key,
+                () => TextEditingController(
+                  text: question.defaultAnswer.trim().isNotEmpty
+                      ? question.defaultAnswer.trim()
+                      : (question.required ? '确认，无补充。' : ''),
+                ),
+              );
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 10),
+                child: TextField(
+                  controller: controller,
+                  maxLines: 2,
+                  decoration: InputDecoration(
+                    labelText:
+                        '${question.title}${question.required ? '（必填）' : '（建议）'}',
+                    hintText: question.hint.trim().isNotEmpty
+                        ? question.hint
+                        : (question.required ? '请输入你的确认或补充' : '可选：输入你的判断或补充'),
+                    border: const OutlineInputBorder(),
+                    contentPadding:
+                        const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  ),
+                ),
+              );
+            }),
             const SizedBox(height: 12),
             Row(
               children: [
                 Expanded(
                   child: OutlinedButton.icon(
                     onPressed: () async {
-                      _stageGuidanceApproved[_currentStageIndex] = false;
+                      _clearStageGuidanceState(_currentStageIndex);
                       currentStage?.status = 'running';
                       currentStage?.contentPreview = '';
                       currentStage?.feedback = null;
@@ -2943,7 +3141,9 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
   void dispose() {
     _promptController.dispose();
     _guidanceController.dispose();
-    _stageGuidanceController.dispose();
+    for (final controller in _stageGuidanceControllers.values) {
+      controller.dispose();
+    }
     _llm.dispose();
     super.dispose();
   }

@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:path/path.dart' as p;
 
 import '../models/models.dart';
+import 'http_client_factory.dart';
 
 class ProjectWikiStore {
   static const _schemaVersion = 'storyforge-wiki-v1';
@@ -30,6 +31,7 @@ class ProjectWikiStore {
     for (final child in [
       'raw',
       'wiki',
+      'archive',
       p.join('outputs', 'images'),
       p.join('outputs', 'videos'),
     ]) {
@@ -60,6 +62,7 @@ class ProjectWikiStore {
 - [Asset Manifest](asset_manifest.md)
 - [Storyboards](storyboards.md)
 - [Video Prompt Pack](video_prompt_pack.md)
+- [Living Knowledge](knowledge.md)
 - [Decisions](decisions.md)
 - [Log](log.md)
 ''',
@@ -79,6 +82,29 @@ class ProjectWikiStore {
     await _writeIfAbsent(
       p.join(dir.path, 'wiki', 'decisions.md'),
       _frontMatter('decisions', projectId) + '# Decisions\n\n',
+    );
+    await _writeIfAbsent(
+      p.join(dir.path, 'wiki', 'knowledge.md'),
+      _frontMatter('knowledge', projectId) +
+          '''
+# Living Knowledge
+
+This page is maintained by WikiMutationService. It summarizes durable creative facts, continuity rules, unresolved questions, and archived decisions distilled from stage outputs.
+
+## Canon
+
+## Characters
+
+## Locations
+
+## Props
+
+## Continuity
+
+## Open Questions
+
+## Archive Index
+''',
     );
     await _writeIfAbsent(
       p.join(dir.path, 'wiki', 'log.md'),
@@ -112,6 +138,7 @@ class ProjectWikiStore {
           ..writeln('- required: ${q['required'] ?? true}')
           ..writeln('- question: ${q['question'] ?? ''}')
           ..writeln('- hint: ${q['hint'] ?? ''}')
+          ..writeln('- default_answer: ${q['default_answer'] ?? ''}')
           ..writeln('- answer: pending')
           ..writeln();
       }
@@ -273,14 +300,25 @@ ${brief['story_outline'] ?? ''}
     required String projectId,
     required List storyboards,
   }) async {
+    final storyboardMaps =
+        storyboards.map(_toMap).whereType<Map<String, dynamic>>().toList()
+          ..sort((a, b) {
+            final sceneA = (a['scene_num'] as num?)?.toInt() ?? 0;
+            final sceneB = (b['scene_num'] as num?)?.toInt() ?? 0;
+            if (sceneA != sceneB) return sceneA - sceneB;
+            final shotA = (a['shot_num'] as num?)?.toInt() ?? 0;
+            final shotB = (b['shot_num'] as num?)?.toInt() ?? 0;
+            return shotA - shotB;
+          });
     final buffer = StringBuffer()
       ..write(_frontMatter('storyboards', projectId))
       ..writeln('# Storyboards')
       ..writeln();
 
-    for (final sb in storyboards) {
-      final map = _toMap(sb);
-      if (map == null) continue;
+    for (var i = 0; i < storyboardMaps.length; i++) {
+      final map = storyboardMaps[i];
+      final previous = i > 0 ? storyboardMaps[i - 1] : null;
+      final next = i + 1 < storyboardMaps.length ? storyboardMaps[i + 1] : null;
       buffer
         ..writeln(
             '## Scene ${map['scene_num'] ?? ''} Shot ${map['shot_num'] ?? ''}')
@@ -295,6 +333,9 @@ ${brief['story_outline'] ?? ''}
         ..writeln()
         ..writeln('### Video Prompt')
         ..writeln(map['video_prompt'] ?? '')
+        ..writeln()
+        ..writeln('### Continuity Notes')
+        ..writeln(_formatContinuityNotes(map, previous, next))
         ..writeln();
     }
 
@@ -307,6 +348,32 @@ ${brief['story_outline'] ?? ''}
     await appendLog(projectId, 'Updated storyboards', data: {
       'storyboardCount': storyboards.length,
     });
+  }
+
+  String _formatContinuityNotes(
+    Map<String, dynamic> current,
+    Map<String, dynamic>? previous,
+    Map<String, dynamic>? next,
+  ) {
+    final currentScene = (current['scene_num'] as num?)?.toInt();
+    final previousScene = (previous?['scene_num'] as num?)?.toInt();
+    final nextScene = (next?['scene_num'] as num?)?.toInt();
+    final buffer = StringBuffer()
+      ..writeln(
+          '- current: ${current['description'] ?? ''} / ${current['video_prompt'] ?? ''}');
+    if (previous != null && previousScene == currentScene) {
+      buffer.writeln(
+          '- must_continue_from_previous: ${previous['description'] ?? ''} / ${previous['video_prompt'] ?? ''}');
+    } else {
+      buffer.writeln('- must_continue_from_previous: scene start');
+    }
+    if (next != null && nextScene == currentScene) {
+      buffer.writeln(
+          '- must_prepare_for_next: ${next['description'] ?? ''} / ${next['video_prompt'] ?? ''}');
+    }
+    buffer.writeln(
+        '- rule: preserve character identity, costume, props, scene geography, facing direction, movement vector, and end-state between adjacent shots.');
+    return buffer.toString().trim();
   }
 
   Future<void> updateVideoClips({
@@ -331,7 +398,8 @@ ${brief['story_outline'] ?? ''}
         ..writeln()
         ..writeln('- state: ${map['state'] ?? ''}')
         ..writeln('- video_url: ${map['video_url'] ?? ''}')
-        ..writeln('- local_path: ${map['local_path'] ?? ''}')
+        ..writeln(
+            '- local_path: ${map['local_path'] ?? map['video_local_path'] ?? ''}')
         ..writeln('- error_reason: ${map['error_reason'] ?? ''}')
         ..writeln();
     }
@@ -340,6 +408,103 @@ ${brief['story_outline'] ?? ''}
     await appendLog(projectId, 'Updated video results', data: {
       'clipCount': clips.length,
     });
+  }
+
+  Future<String?> persistVideoFile({
+    required String projectId,
+    required String videoUrl,
+    String? storyboardId,
+  }) async {
+    final trimmed = videoUrl.trim();
+    if (trimmed.isEmpty) return null;
+
+    final dir = await projectDirectory(projectId);
+    final videosDir = Directory(p.join(dir.path, 'outputs', 'videos'));
+    await videosDir.create(recursive: true);
+
+    final safeStoryboardId = _sanitizePathPart(storyboardId ?? 'clip');
+    final sourceHash = _shortHash(trimmed);
+    final sourceUri = Uri.tryParse(trimmed);
+    var extension = _extensionFromUri(sourceUri);
+    extension ??= '.mp4';
+
+    final destination = File(
+      p.join(videosDir.path, '${safeStoryboardId}_$sourceHash$extension'),
+    );
+    if (await destination.exists() && await destination.length() > 0) {
+      await appendLog(projectId, 'Video already saved in wiki outputs', data: {
+        'storyboardId': storyboardId,
+        'source': trimmed,
+        'localPath': destination.path,
+      });
+      return destination.path;
+    }
+
+    try {
+      if (PersistentFileSource.isLocalFilePath(trimmed)) {
+        final source = trimmed.startsWith('file://')
+            ? File.fromUri(Uri.parse(trimmed))
+            : File(trimmed);
+        if (!await source.exists()) return null;
+        await source.copy(destination.path);
+      } else if (sourceUri != null &&
+          (sourceUri.scheme == 'http' || sourceUri.scheme == 'https')) {
+        final client = createConfiguredHttpClient();
+        try {
+          final response =
+              await client.get(sourceUri).timeout(const Duration(minutes: 5));
+          if (response.statusCode < 200 || response.statusCode >= 300) {
+            throw HttpException(
+              'HTTP ${response.statusCode}',
+              uri: sourceUri,
+            );
+          }
+
+          final contentType = response.headers['content-type'];
+          final contentExtension = _extensionFromContentType(contentType);
+          final target =
+              contentExtension != null && contentExtension != extension
+                  ? File(p.join(
+                      videosDir.path,
+                      '${safeStoryboardId}_$sourceHash$contentExtension',
+                    ))
+                  : destination;
+          if (!await target.exists() || await target.length() == 0) {
+            await target.writeAsBytes(response.bodyBytes, flush: true);
+          }
+          await appendLog(projectId, 'Saved video file in wiki outputs', data: {
+            'storyboardId': storyboardId,
+            'source': trimmed,
+            'localPath': target.path,
+            'bytes': response.bodyBytes.length,
+          });
+          return target.path;
+        } finally {
+          client.close();
+        }
+      } else {
+        await appendLog(projectId, 'Skipped unsupported video source', data: {
+          'storyboardId': storyboardId,
+          'source': trimmed,
+        });
+        return null;
+      }
+
+      await appendLog(projectId, 'Saved video file in wiki outputs', data: {
+        'storyboardId': storyboardId,
+        'source': trimmed,
+        'localPath': destination.path,
+      });
+      return destination.path;
+    } catch (e) {
+      await appendLog(projectId, 'Failed to save video file in wiki outputs',
+          data: {
+            'storyboardId': storyboardId,
+            'source': trimmed,
+            'error': e.toString(),
+          });
+      return null;
+    }
   }
 
   Future<String> compileContextPack(
@@ -352,33 +517,39 @@ ${brief['story_outline'] ?? ''}
           p.join('raw', 'user_answers.md'),
           p.join('wiki', 'constraints.md'),
           p.join('wiki', 'story_bible.md'),
+          p.join('wiki', 'knowledge.md'),
         ],
       'scripting' => [
           p.join('raw', 'creative_input.md'),
           p.join('wiki', 'constraints.md'),
           p.join('wiki', 'story_bible.md'),
+          p.join('wiki', 'knowledge.md'),
           p.join('wiki', 'brief.md'),
         ],
       'asseting' => [
           p.join('wiki', 'constraints.md'),
           p.join('wiki', 'story_bible.md'),
+          p.join('wiki', 'knowledge.md'),
           p.join('wiki', 'script.md'),
         ],
       'storyboarding' => [
           p.join('wiki', 'constraints.md'),
           p.join('wiki', 'story_bible.md'),
+          p.join('wiki', 'knowledge.md'),
           p.join('wiki', 'script.md'),
           p.join('wiki', 'asset_manifest.md'),
         ],
       'generating' => [
           p.join('wiki', 'constraints.md'),
           p.join('wiki', 'story_bible.md'),
+          p.join('wiki', 'knowledge.md'),
           p.join('wiki', 'asset_manifest.md'),
           p.join('wiki', 'video_prompt_pack.md'),
         ],
       _ => [
           p.join('wiki', 'constraints.md'),
           p.join('wiki', 'story_bible.md'),
+          p.join('wiki', 'knowledge.md'),
         ],
     };
 
@@ -425,6 +596,35 @@ ${brief['story_outline'] ?? ''}
     buffer.writeln();
     await file.writeAsString(buffer.toString(), mode: FileMode.append);
   }
+
+  Future<String> readWikiFile(String projectId, String filename) async {
+    final dir = await projectDirectory(projectId);
+    final file = File(p.join(dir.path, 'wiki', filename));
+    if (!await file.exists()) return '';
+    return file.readAsString();
+  }
+
+  Future<void> writeWikiFile(
+    String projectId,
+    String filename,
+    String content,
+  ) async {
+    await _writeWiki(projectId, filename, content);
+  }
+
+  Future<void> writeArchiveFile(
+    String projectId,
+    String filename,
+    String content,
+  ) async {
+    final dir = await projectDirectory(projectId);
+    final file = File(p.join(dir.path, 'archive', filename));
+    await file.parent.create(recursive: true);
+    await file.writeAsString(content);
+  }
+
+  String frontMatterFor(String page, String projectId) =>
+      _frontMatter(page, projectId);
 
   Future<void> _mergeStoryBible(
     String projectId, {
@@ -518,5 +718,43 @@ updated_at: ${DateTime.now().toIso8601String()}
       return null;
     }
     return null;
+  }
+
+  String? _extensionFromUri(Uri? uri) {
+    if (uri == null) return null;
+    final ext = p.extension(uri.path).toLowerCase();
+    if (['.mp4', '.webm', '.mov', '.m4v'].contains(ext)) return ext;
+    return null;
+  }
+
+  String? _extensionFromContentType(String? contentType) {
+    final lower = contentType?.toLowerCase() ?? '';
+    if (lower.contains('webm')) return '.webm';
+    if (lower.contains('quicktime')) return '.mov';
+    if (lower.contains('mp4') || lower.contains('mpeg4')) return '.mp4';
+    return null;
+  }
+
+  String _sanitizePathPart(String value) {
+    final sanitized = value.replaceAll(RegExp(r'[^A-Za-z0-9_.-]+'), '_');
+    return sanitized.isEmpty ? 'clip' : sanitized;
+  }
+
+  String _shortHash(String value) {
+    var hash = 0x811c9dc5;
+    for (final unit in value.codeUnits) {
+      hash ^= unit;
+      hash = (hash * 0x01000193) & 0xffffffff;
+    }
+    return hash.toRadixString(16).padLeft(8, '0');
+  }
+}
+
+class PersistentFileSource {
+  static bool isLocalFilePath(String value) {
+    if (value.startsWith('file://')) return true;
+    final uri = Uri.tryParse(value);
+    if (uri != null && uri.hasScheme) return false;
+    return p.isAbsolute(value);
   }
 }

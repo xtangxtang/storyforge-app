@@ -26,6 +26,8 @@ Creative Input -> Planning -> Scripting -> Asseting -> Storyboarding -> Generati
 - 每个阶段调用 LLM 或生成服务前，都要从 wiki 编译当前阶段需要的上下文。
 - 用户确认的约束优先级高于 LLM 自动生成内容。
 - wiki-first 不等于立即删除数据库。SQLite 暂时保留，后续可降级为缓存、索引或任务队列。
+- self-growing wiki 是项目记忆的默认演进机制：每次阶段产物、用户答案、资产、分镜、视频或本地文件发生变化后，都应经过统一 mutation 服务写入结构化 wiki，再由 LLM 抽取可长期保留的新知识、去重、归档，并更新 `wiki/knowledge.md`。
+- 新增代码时不要绕过 `WikiMutationService` 直接维护创作记忆；确实只做底层文件初始化或无 LLM 的本地下载时，应在上层流程补一次 mutation，让后续阶段能读到同一份上下文。
 
 ## 项目 Wiki 目录
 
@@ -52,12 +54,79 @@ wiki/
   storyboards.md
   video_prompt_pack.md
   video_results.md
+  knowledge.md
   decisions.md
   log.md
+archive/
 outputs/
   images/
   videos/
 ```
+
+## Self-Growing Wiki 机制
+
+核心目标：每个项目都有一份会随创作流程自动生长的 Markdown 记忆。它不只是保存阶段输出，而是把“对后续有用的事实、约束、连续性要求、开放问题和决策”沉淀成长期上下文。
+
+统一入口：
+
+- `lib/services/wiki_mutation_service.dart`
+- `WikiMutationService` 包装 `ProjectWikiStore` 和 `LlmService`。
+- 外层 UI 或 Agent 流程在用户答案、Brief、剧本、资产、分镜、视频片段、视频文件发生变化后，应优先调用 `WikiMutationService` 的 mutation 方法，而不是各自手写 wiki 更新逻辑。
+
+当前 mutation 类型：
+
+- `updateUserAnswers`
+- `updateBrief`
+- `updateScript`
+- `updateAssets`
+- `updateStoryboards`
+- `updateVideoClips`
+- `persistVideoFile`
+- `appendLog`
+- `compileContextPack`
+
+每次 mutation 的默认流程：
+
+1. 先用 `ProjectWikiStore` 更新对应结构化页面，例如 `constraints.md`、`story_bible.md`、`script.md`、`asset_manifest.md`、`storyboards.md`、`video_prompt_pack.md`、`video_results.md`。
+2. 再读取当前 wiki 上下文，把本次变化交给 LLM 总结。
+3. LLM 只输出结构化 JSON，包括 `canon`、`characters`、`locations`、`props`、`continuity`、`open_questions`、`decisions`、`archive_notes`。
+4. 服务端做去重合并，把长期有效内容写入 `wiki/knowledge.md`。
+5. 不适合放入长期主记忆但值得追踪的内容写入 `archive/wiki_growth_<timestamp>_<mutationType>.md`。
+6. 如果 LLM 总结失败，只记录日志，不阻断主流程。
+
+`wiki/knowledge.md` 是后续阶段读取的核心长期记忆，当前固定章节包括：
+
+- `Canon`
+- `Characters`
+- `Locations`
+- `Props`
+- `Continuity`
+- `Open Questions`
+- `Decisions`
+- `Archive Index`
+
+阶段调用 LLM 或生成服务前的规则：
+
+- 先调用 `compileContextPack(stage)` 编译 wiki 上下文。
+- 将上下文注入 `AgentContext.data['creative_memory']` 或等价字段。
+- DirectorAgent 进入每个新阶段前，应基于 wiki 生成建议/询问列表，让用户确认或补充必要信息。
+- 后续生成 Brief、剧本、角色/道具、分镜、视频 prompt 时都必须读取同一份 wiki memory。
+
+视频与文件输出规则：
+
+- 生成或提取的视频应默认保存到 `%LOCALAPPDATA%\Storyforge\projects\<projectId>\outputs\videos\`。
+- 成功保存后应写入 `wiki/video_results.md`，并通过 self-growing 流程提炼对后续剪辑、连续性或重生成有用的信息。
+
+连续性规则：
+
+- 分镜与视频 prompt 必须把上一镜头的结束状态、当前镜头的起始状态、人物朝向、运动方向、场景地理关系、服装道具一致性写清楚。
+- 这些内容应进入 `wiki/knowledge.md` 的 `Continuity` 或对应分镜页，供下一镜头生成时读取。
+
+当前边界：
+
+- SQLite 仍是运行/UI 缓存，不是长期创作事实源。
+- 允许 DAO 继续负责 UI 状态和数据库兼容，但凡会影响创作语义或后续生成的更新，都要同步经过 `WikiMutationService`。
+- `ProjectWikiStore` 负责底层文件读写；`WikiMutationService` 负责“写入 + 总结 + 去重 + 归档 + 长期知识更新”。
 
 ## 已完成修改动作
 

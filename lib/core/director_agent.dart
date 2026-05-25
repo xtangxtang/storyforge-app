@@ -39,6 +39,7 @@ class DirectorGuidanceQuestion {
   final String question;
   final String hint;
   final bool required;
+  final String defaultAnswer;
 
   const DirectorGuidanceQuestion({
     required this.id,
@@ -46,6 +47,7 @@ class DirectorGuidanceQuestion {
     required this.question,
     required this.hint,
     required this.required,
+    this.defaultAnswer = '',
   });
 
   factory DirectorGuidanceQuestion.fromMap(
@@ -62,6 +64,7 @@ class DirectorGuidanceQuestion {
           : '请补充这部分创作信息。',
       hint: map['hint']?.toString().trim() ?? '',
       required: map['required'] is bool ? map['required'] as bool : true,
+      defaultAnswer: map['default_answer']?.toString().trim() ?? '',
     );
   }
 }
@@ -102,6 +105,7 @@ Brief 内容：
 6. 每个分镜是否包含 scene_num, shot_num, first_frame_prompt, video_prompt 等必要字段。
 7. first_frame_prompt 是否足够详细（光影、色调、构图、角色外貌）。
 8. video_prompt 是否描述了动态（运镜、动作、环境变化）。
+9. 同一 scene 内相邻分镜是否保持动作连续、人物朝向/运动方向连续、场景方位连续；不得出现上一镜头朝校门移动、下一镜头却无解释地背离校门这类违和断裂。
 
 参考剧本：
 {script}
@@ -210,6 +214,7 @@ class DirectorAgent extends Agent {
       question: '这个「75」具体表示什么？请写清单位和用途。',
       hint: '例如：75秒，竖屏微短剧单集总时长；每集约75秒。',
       required: true,
+      defaultAnswer: '确认，75 指竖屏微短剧单集总时长，单位为秒。',
     ),
     DirectorGuidanceQuestion(
       id: 'supporting_role',
@@ -217,6 +222,7 @@ class DirectorAgent extends Agent {
       question: '周瑞是谁？他和主角分别是什么关系？在剧情里承担什么作用？',
       hint: '例如：陈振飞的同班好友，暗恋俞墨凡，负责制造误会和推动告白。',
       required: true,
+      defaultAnswer: '确认，按当前 wiki 已记录的人物关系执行；如未记录，请先补充。',
     ),
     DirectorGuidanceQuestion(
       id: 'inciting_event',
@@ -224,6 +230,7 @@ class DirectorAgent extends Agent {
       question: '撞人/相遇之后，主角二人为什么会继续产生交集？',
       hint: '例如：俞墨凡发现陈振飞拿错了她的书包，两人被迫一起找回。',
       required: true,
+      defaultAnswer: '确认，按当前 wiki 已记录的交集契机执行；如未记录，请先补充。',
     ),
     DirectorGuidanceQuestion(
       id: 'emotional_beats',
@@ -231,6 +238,7 @@ class DirectorAgent extends Agent {
       question: '两人关系从陌生到靠近，中间发生哪几个关键事件？',
       hint: '例如：误会、道歉、共同完成课堂任务、雨天送伞、发现彼此秘密。',
       required: true,
+      defaultAnswer: '确认，按当前 wiki 已记录的情感推进事件执行；如未记录，请先补充。',
     ),
     DirectorGuidanceQuestion(
       id: 'conflict_ending',
@@ -238,6 +246,7 @@ class DirectorAgent extends Agent {
       question: '故事的核心冲突是什么？最后落在什么结局或情绪上？',
       hint: '例如：周瑞的误会让两人疏远，结尾陈振飞公开道歉，俞墨凡露出笑意。',
       required: true,
+      defaultAnswer: '确认，按当前 wiki 已记录的核心冲突和结局落点执行；如未记录，请先补充。',
     ),
     DirectorGuidanceQuestion(
       id: 'character_bios',
@@ -245,6 +254,7 @@ class DirectorAgent extends Agent {
       question: '请补充核心人物性格和行为逻辑，尤其是陈振飞、俞墨凡、周瑞。',
       hint: '例如：陈振飞跳脱粗心但真诚；俞墨凡清冷慢热；周瑞敏感好胜。',
       required: true,
+      defaultAnswer: '确认，按当前 wiki 已记录的人物小传执行；如未记录，请先补充。',
     ),
   ];
 
@@ -270,6 +280,7 @@ class DirectorAgent extends Agent {
       "title": "1. 简短标题",
       "question": "面向用户的一句话问题",
       "hint": "可填写示例，不要替用户决定",
+      "default_answer": "用户没有补充时可采用的默认确认语，例如：确认，无补充",
       "required": true
     }
   ]
@@ -342,6 +353,7 @@ $creativeInput''';
       "title": "简短标题",
       "question": "面向用户的一句话问题或建议",
       "hint": "用户可输入的判断/补充示例，不要替用户决定",
+      "default_answer": "用户没有补充时可采用的默认确认语，例如：确认，无补充",
       "required": true
     }
   ]

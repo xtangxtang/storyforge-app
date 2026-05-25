@@ -111,7 +111,14 @@ JSON 结构必须完全匹配：
 - shot_type 用: close-up/medium/wide/extreme-close-up
 - camera_move 用: static/pan/zoom/tilt/dolly
 - first_frame_prompt 必须按五个维度组织：[主体描述]角色外貌、服装、姿态、表情；[细节描述]道具、纹理、材质等细节；[背景描述]场景环境、空间层次；[光影描述]光源方向、明暗对比、色调氛围；[情绪描述]画面传递的情感张力和情绪基调。每个维度都要有实质性内容，不得省略任何维度。
-- video_prompt 侧重动态：运镜、角色动作、环境变化''';
+- video_prompt 侧重动态：运镜、角色动作、环境变化
+
+【镜头连续性硬规则】
+- 同一 scene 内的相邻 shot 必须像连续视频一样衔接，不能只各自好看。
+- 每个 description 和 video_prompt 都必须明确：镜头开始时人物在哪里、面朝哪里、朝哪个方向运动、镜头结束时停在哪里/朝哪里。
+- 必须保持人物服装、道具、场景地理关系、屏幕方向一致。例如上一镜头人物朝校门移动，下一镜头不能无解释地背离校门或从相反方向重新进入。
+- 如果需要反向、转身、回头、跨越时间或空间，必须在 video_prompt 里明确写出转身/切换原因，否则视为连续性错误。
+- first_frame_prompt 必须描述当前镜头首帧与上一镜头结尾的衔接状态；同一场景后续镜头不能重新设定人物位置。''';
 
 class PlanningAgent extends Agent {
   @override
@@ -392,8 +399,11 @@ class ProductionAgent extends Agent {
       ChatMessage(role: 'system', content: _storyboardSystemPrompt),
       ChatMessage(
         role: 'user',
-        content:
-            '请根据以下剧本制作分镜。注意：必须严格按照剧本的场景、角色、剧情来制作分镜，不得自行创作新内容。\n\n$scriptText$briefText$memoryText$feedbackText',
+        content: '请根据以下剧本制作分镜。注意：必须严格按照剧本的场景、角色、剧情来制作分镜，不得自行创作新内容。\n\n'
+            '连续性要求：生成每个镜头时，请把同一场景内的上一镜头结尾状态和下一镜头开头需求一起考虑。'
+            '每个 video_prompt 都必须写清“起始状态 -> 动作过程 -> 结束状态”，尤其是人物朝向、运动方向、与校门/教室/道具的空间关系。'
+            '如果两个镜头之间发生转身、掉头、跨越空间或时间跳切，必须显式说明，否则不要改变运动方向。\n\n'
+            '$scriptText$briefText$memoryText$feedbackText',
       ),
     ];
 
@@ -634,7 +644,7 @@ class AssetDesignAgent extends Agent {
     final imageStore = PersistentImageStore();
 
     for (final asset in assets) {
-      final prompt = asset.prompt ?? asset.description ?? '';
+      final prompt = _cleanImagePrompt(asset.prompt ?? asset.description ?? '');
       if (prompt.isEmpty) {
         await AppLogger.warn(
           'Asset has no prompt/description, skipping image generation',
@@ -758,14 +768,24 @@ class AssetDesignAgent extends Agent {
     }
 
     if (feedbackText.isNotEmpty) {
-      buffer.write(feedbackText);
-    }
-    if (memoryText.isNotEmpty) {
       buffer.writeln();
-      buffer.write(memoryText);
+      buffer.write(_cleanImagePrompt(feedbackText, maxLength: 180));
     }
 
-    return buffer.toString();
+    return _cleanImagePrompt(buffer.toString(), maxLength: 1400);
+  }
+
+  String _cleanImagePrompt(String value, {int maxLength = 900}) {
+    var text = value
+        .replaceAll(RegExp(r'---[\s\S]*?---'), ' ')
+        .replaceAll(RegExp(r'#.+'), ' ')
+        .replaceAll(RegExp(r'https?://\S+'), ' ')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+    if (text.length > maxLength) {
+      text = text.substring(0, maxLength);
+    }
+    return text;
   }
 }
 
@@ -834,6 +854,8 @@ class VideoAgent extends Agent {
       final duration = (sbMap['duration'] as num?)?.toInt() ?? 5;
       final sceneNum = (sbMap['scene_num'] as num?)?.toInt() ?? 0;
       final shotDescription = sbMap['description'] as String? ?? '';
+      final previousShot = i > 0 ? sorted[i - 1] : null;
+      final nextShot = i + 1 < sorted.length ? sorted[i + 1] : null;
       final isNewScene = lastSceneNum == null || sceneNum != lastSceneNum;
 
       // Detect scene change — reset continuity chain for new scenes
@@ -854,7 +876,12 @@ class VideoAgent extends Agent {
       final enhancedVideoPrompt = _enhanceVideoPrompt(
             consistencyAnchors,
             sceneNum,
-            videoPrompt,
+            _withAdjacentShotContinuity(
+              current: sbMap,
+              previous: previousShot,
+              next: nextShot,
+              basePrompt: videoPrompt,
+            ),
             shotDescription,
           ) +
           memoryText +
@@ -977,6 +1004,46 @@ class VideoAgent extends Agent {
   // ============================================================
   // Consistency anchor extraction and injection
   // ============================================================
+
+  String _withAdjacentShotContinuity({
+    required Map<String, dynamic> current,
+    required Map<String, dynamic>? previous,
+    required Map<String, dynamic>? next,
+    required String basePrompt,
+  }) {
+    final currentScene = (current['scene_num'] as num?)?.toInt();
+    final currentShot = (current['shot_num'] as num?)?.toInt();
+    final previousScene = (previous?['scene_num'] as num?)?.toInt();
+    final nextScene = (next?['scene_num'] as num?)?.toInt();
+
+    final buffer = StringBuffer()
+      ..writeln(basePrompt)
+      ..writeln()
+      ..writeln('【相邻镜头连续性约束】')
+      ..writeln('当前镜头：Scene $currentScene Shot $currentShot')
+      ..writeln('当前镜头描述：${current['description'] ?? ''}');
+
+    if (previous != null && previousScene == currentScene) {
+      buffer
+        ..writeln('上一镜头描述：${previous['description'] ?? ''}')
+        ..writeln('上一镜头动态：${previous['video_prompt'] ?? ''}')
+        ..writeln('当前镜头首帧必须承接上一镜头的结束位置、人物朝向、运动方向和场景空间关系。');
+    } else {
+      buffer.writeln('这是该场景的第一个镜头，需要建立清楚的场景地理关系和人物运动方向。');
+    }
+
+    if (next != null && nextScene == currentScene) {
+      buffer
+        ..writeln('下一镜头描述：${next['description'] ?? ''}')
+        ..writeln('下一镜头动态：${next['video_prompt'] ?? ''}')
+        ..writeln('当前镜头结尾必须为下一镜头留下可衔接的动作状态。');
+    }
+
+    buffer
+      ..writeln('硬性要求：不得让人物无解释地反向移动、瞬移、换服装、换道具或改变场景方位。')
+      ..writeln('请在本镜头中明确“起始状态 -> 动作过程 -> 结束状态”。');
+    return buffer.toString();
+  }
 
   /// Extracts character and scene consistency anchors from the script assets.
   /// Includes both text descriptions (for prompt enhancement) and canonical
