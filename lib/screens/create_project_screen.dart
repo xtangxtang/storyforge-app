@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as p;
 import 'package:uuid/uuid.dart';
 import '../config/app_config.dart';
+import '../config/creative_templates.dart';
 import '../db/dao/dao.dart';
 import '../models/models.dart';
 import '../core/director_agent.dart';
@@ -38,6 +39,9 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
   String? _projectId;
   AgentContext? _agentCtx;
   DirectorAgent? _director;
+
+  /// Selected genre/scene template id (optional, specializes the base prompts).
+  String? _templateId;
 
   bool _creating = false;
   int _currentStageIndex = 0;
@@ -275,6 +279,7 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
       projectId: pid,
       data: {
         'prompt': prompt,
+        'creativeTemplateId': _templateId,
         'currentStage': startStage >= _stageDefs.length
             ? 'done'
             : _stageIndexToWorkflowStage(startStage),
@@ -500,6 +505,7 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
       projectId: projectId,
       data: {
         'prompt': _promptController.text.trim(),
+        'creativeTemplateId': _templateId,
         'director_guidance': directorGuidance,
         'creative_memory':
             await _wiki.compileContextPack(projectId, stage: 'planning'),
@@ -1868,6 +1874,29 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
                 border: OutlineInputBorder(),
                 alignLabelWithHint: true,
               ),
+            ),
+          ),
+
+          // Optional genre/scene template — specializes the (general) base prompts.
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+            child: DropdownButtonFormField<String?>(
+              initialValue: _templateId,
+              isExpanded: true,
+              decoration: const InputDecoration(
+                labelText: '题材模板（可选）',
+                helperText: '选定后作为风格倾向参考；你的创意描述始终优先',
+                border: OutlineInputBorder(),
+              ),
+              items: [
+                const DropdownMenuItem<String?>(
+                    value: null, child: Text('不指定（通用）')),
+                for (final t in kCreativeTemplates)
+                  DropdownMenuItem<String?>(
+                      value: t.id, child: Text('${t.name}（${t.genre}）')),
+              ],
+              onChanged:
+                  _creating ? null : (v) => setState(() => _templateId = v),
             ),
           ),
 
