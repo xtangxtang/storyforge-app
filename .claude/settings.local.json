@@ -33,7 +33,20 @@
       "Bash(C:\\\\Windows\\\\System32\\\\taskkill.exe *)",
       "Bash(powershell *)",
       "Bash(git add *)",
-      "Bash(git commit *)"
+      "Bash(git commit *)",
+      "Bash(rm -f consistency_out/*)",
+      "Bash(rmdir consistency_out)",
+      "Bash(ls consistency_out)",
+      "Bash(PYTHONIOENCODING=utf-8 PYTHONUTF8=1 python -c ' *)",
+      "Bash(PYTHONIOENCODING=utf-8 PYTHONUTF8=1 python *)",
+      "Bash(VID_RES=480p PYTHONIOENCODING=utf-8 PYTHONUTF8=1 python tool/run_pipeline_ark.py)",
+      "Bash(tee generated/run_percharacter.log)",
+      "Bash(tee generated/run_anchor.log)",
+      "Bash(tee generated/run_anchorclip.log)"
     ]
-  }
+  },
+  "enabledMcpjsonServers": [
+    "dart",
+    "context7"
+  ]
 }

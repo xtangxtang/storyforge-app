@@ -1,8 +1,9 @@
 import 'dart:convert';
 import 'package:uuid/uuid.dart';
 import 'agent.dart';
+import '../config/app_config.dart';
 import '../services/llm_service.dart';
-import '../services/dashscope_service.dart';
+import '../services/media_service.dart';
 import '../models/models.dart';
 import '../services/app_logger.dart';
 import '../services/persistent_image_store.dart';
@@ -73,23 +74,27 @@ JSON 结构必须完全匹配：
 ''';
 
 const _storyboardSystemPrompt =
-    '''你是专业分镜师。根据提供的剧本文本制作分镜脚本，必须输出严格 JSON 格式，不要任何多余文字。
+    '''你是专业分镜师。你的任务是把剧本切成若干「连续 beat」，每个 beat 会被生成为**一整段连续视频**。必须输出严格 JSON，不要任何多余文字。
 
-【最高优先级规则 — 违反任何一条将导致输出被拒绝】
+【什么是一个 beat（最重要的概念，必须正确理解）】
+- 一个 beat = **一个不间断的连续镜头（单条运镜的一镜到底）**，会被作为**一整段视频**生成。
+- 因此一个 beat 内部的动作、道具状态、人物位置天然是连续的——这正是用来保证连贯性的手段。
+- **同一时间、同一地点、连续不断发生的动作，必须合并进同一个 beat**，即使中间镜头要移动（用运镜表达）。
+- **多人互动事件绝不能拆**：两个角色之间一次连续的互动（碰撞、对话、递东西、搀扶等），从起因到反应到收尾是一个完整 beat，必须把**所有参与角色放进同一个 beat 同框演完**。
+- **即使剧本把这次连续互动拆到了不同场景**（如：碰撞在场景1、对方的反应/离开在场景2），只要时间地点连续，就必须合并成同一个 beat，characters 列出事件中全部在场角色。
+  例：「陈振飞叼包子骑车冲来 → 刹不住 → 车头轻撞俞墨凡 → 俞墨凡踉跄、包子因惯性脱手飞出 → 陈振飞单脚撑地停车、连声道歉伸手要扶 → 俞墨凡平静拍掉裤子上的土说没事 → 转身头也不回走进校门」整段是**一个 beat**，characters=["陈振飞","俞墨凡"]，绝不能把俞墨凡的反应单独拆成另一个 beat（拆开会导致撞人对象凭空出现/消失、包子忽有忽无、动作不接）。
+- **只有遇到下列情况才切换到新的 beat**：
+  1) 换地点 / 换场景（如校门口 → 二楼教室）；
+  2) 明显的时间跳跃；
+  3) 必须切到一个无法用连续运镜衔接的全新视角（如从街上切到另一人的主观视角）。
+- 不要为了"多几个镜头"而把连续动作切碎；也不要把跨地点/跨时间的内容硬塞进一个 beat。
 
-1. **场景数量严格一致**：剧本有几个场景（scenes 数组的长度），分镜就有几组镜头。绝对不得增加或减少场景组。
-2. **场景编号严格对应**：剧本场景的 scene_num 是 1, 2, 3...，分镜的 scene_num 必须是完全相同的 1, 2, 3...，一一对应，不得跳过或重排。
-3. **角色绝对忠于剧本**：
-   - 剧本中出现的角色名字是什么，分镜描述中就必须用同样的名字或指代。
-   - 剧本中是男生就是男生，是女生就是女生，不得改变性别。
-   - 不得凭空添加剧本中没有的角色。
-4. **剧情绝对忠于剧本**：
-   - 剧本里发生了什么动作和事件，分镜就描述什么。
-   - 不得自行添加新的事件、新的相遇、新的冲突、新的情感线。
-   - 不得把校园场景改成街道、把同学关系改成陌生人偶遇、把男生改成女生。
-5. **道具忠于剧本设定**：剧本中出现的关键道具，分镜画面中应保持外观一致，不得替换或忽略。
-6. **场景地点忠于剧本**：剧本写的场景地点是什么，分镜画面中就必须是这个地点，不得替换。
-6. 每个场景 2-3 个镜头，每个镜头的 duration 之和应接近对应场景的 duration。
+【最高优先级规则 — 违反任一条输出将被拒绝】
+1. 角色绝对忠于剧本：用剧本中的角色原名；剧本是男生就是男生、是女生就是女生，不得改性别；不得凭空添加角色。
+2. 剧情/地点/道具绝对忠于剧本：不得新增事件、相遇、冲突；不得替换地点或道具。
+3. 一个 beat 只能在一个地点、一段连续时间内。
+4. 专有名词（学校名/地名/人名）必须与剧本原文逐字一致，严禁改写或另起名；画面中出现的招牌/牌匾文字（如校门校名）必须写成剧本里的原名。
+5. 机位/构图：户外动作或碰撞 beat 必须用清晰无遮挡的机位（平视或低角度跟拍，主体完整入画），严禁隔着窗户/门框/栏杆/前景障碍物拍摄；窗框/门框构图只允许用在"室内人物向外观望"这类 beat。
 
 JSON 结构必须完全匹配：
 {
@@ -97,28 +102,54 @@ JSON 结构必须完全匹配：
     {
       "scene_num": 1,
       "shot_num": 1,
-      "shot_type": "close-up",
-      "camera_move": "static",
-      "description": "分镜画面描述（中文，忠实反映剧本该场景的动作和画面）",
-      "first_frame_prompt": "首帧图生成提示词（中文，必须按以下五个维度组织：[主体描述]角色/人物的外貌、服装、姿态、表情；[细节描述]画面中的关键道具、纹理、材质等细节；[背景描述]场景环境、空间层次、远景中景近景；[光影描述]光源方向、明暗对比、色调氛围；[情绪描述]画面传递的情感张力、情绪基调）",
-      "video_prompt": "视频生成提示词（中文，描述运镜方式、角色动作、环境变化）",
+      "continuous_camera": true,
+      "shot_type": "wide",
+      "camera_move": "dolly",
+      "characters": ["陈振飞"],
+      "description": "这一整段连续镜头的画面与动作（中文，用角色原名）",
+      "first_frame_prompt": "这段连续镜头**开场第一帧**的画面（中文，五维度：[主体描述]出场角色外貌/服装/此刻姿态/表情；[细节描述]关键道具及其此刻状态；[背景描述]场景环境与景别；[光影描述]光源/色调；[情绪描述]情绪基调）。注意：写的是 beat 开始那一刻的状态（如：陈振飞叼着半个包子、身体前倾正骑车冲向校门），而不是动作结束后的状态。",
+      "video_prompt": "这一整段连续镜头的运镜与动作（中文）：明确【起始状态】→【运镜与动作的连续过程】→【结束状态】，并写清关键道具的连续状态（如：包子始终叼在嘴里，直到撞击瞬间才飞出）",
       "duration": 8
     }
   ]
 }
 
-要求：
-- shot_type 用: close-up/medium/wide/extreme-close-up
-- camera_move 用: static/pan/zoom/tilt/dolly
-- first_frame_prompt 必须按五个维度组织：[主体描述]角色外貌、服装、姿态、表情；[细节描述]道具、纹理、材质等细节；[背景描述]场景环境、空间层次；[光影描述]光源方向、明暗对比、色调氛围；[情绪描述]画面传递的情感张力和情绪基调。每个维度都要有实质性内容，不得省略任何维度。
-- video_prompt 侧重动态：运镜、角色动作、环境变化
+字段要求：
+- scene_num 对应剧本场景号；shot_num 是该场景内 beat 的序号（1,2,...）。
+- continuous_camera：该 beat 是否为需要连续运镜的一镜到底（连续动作 beat 为 true；纯空镜/建立镜头可为 false）。
+- shot_type 用 close-up/medium/wide/extreme-close-up（指这条镜头的主景别）。
+- camera_move 用 static/pan/zoom/tilt/dolly/follow（这条连续镜头主要的运镜方式）。
+- characters：本 beat 画面中**实际出现**的角色原名数组；空镜写 []。这直接决定该镜头调用哪些角色参考图，必须与画面严格一致，不要列入未出现的角色。
+- description / video_prompt 中所有人物一律用剧本原名（如"陈振飞""俞墨凡""周瑞"），禁止用"他/她/一个男生/路人"等模糊指代。
+- duration：覆盖整个 beat 的时长，建议 5-10（秒）；连续动作 beat 通常较长。
 
-【镜头连续性硬规则】
-- 同一 scene 内的相邻 shot 必须像连续视频一样衔接，不能只各自好看。
-- 每个 description 和 video_prompt 都必须明确：镜头开始时人物在哪里、面朝哪里、朝哪个方向运动、镜头结束时停在哪里/朝哪里。
-- 必须保持人物服装、道具、场景地理关系、屏幕方向一致。例如上一镜头人物朝校门移动，下一镜头不能无解释地背离校门或从相反方向重新进入。
-- 如果需要反向、转身、回头、跨越时间或空间，必须在 video_prompt 里明确写出转身/切换原因，否则视为连续性错误。
-- first_frame_prompt 必须描述当前镜头首帧与上一镜头结尾的衔接状态；同一场景后续镜头不能重新设定人物位置。''';
+【video_prompt 必须严格按以下 ①~⑥ 结构写，组织成一段连贯中文（这是决定连贯性与物理合理性的核心）】
+①【主体起始】开场画面里每个在场角色的外貌/服装/表情 + 此刻姿态（与 first_frame 一致）。
+②【连续动作链】最关键：用「先…→紧接着…→随后…→最后…」把整段动作写成一条不间断的时间线，显式写出动作之间的物理因果（如「陈振飞双手猛捏刹车，因前冲惯性来不及，前轮擦上俞墨凡小腿，俞墨凡上身被带得前倾踉跄一步；同一瞬间惯性让陈振飞嘴里的包子脱口弹飞，划出抛物线砸在地上」）；关键道具全程连续，不能凭空有无。
+③【单一运镜】整段只用一种主运镜，单独成句（如「镜头始终低角度侧面跟拍主体，随其前冲平稳右摇」）；绝不要在一个 beat 里切换多种机位或描述剪切。
+④【环境】地点、年代、天气、前景/背景关键元素。
+⑤【光影】光源方向、色温、胶片质感。
+⑥【负面约束】结尾固定加一句：「避免人物变形、肢体粘连穿模、人物瞬移或凭空出现消失、画面跳切闪烁、违反重力与惯性、画面出现任何字幕/文字/水印、动画或CG插画感」。
+【动作必须真的发生，不能呆站】凡剧本写到某角色"走开/进校/离开/跑向某处"，video_prompt 必须写成**实际完成的连续位移**：转身→迈步→走向目标→穿过/进入→背影远去，明确人物移动并最终离开画面或抵达目标；绝不能写成站在原地不动或只给一个静态结束姿势（如俞墨凡拍完土后必须真的转身一步步走进校门、背影远去，而非呆立原地）。
+【写法要点】动作具体可拍、符合重力；一个 beat 只承载一条连续动作链，可包含完整事件（冲来→碰撞→道歉→对方反应→离开），因为是一整段连续视频不会被切断。
+【碰撞要分解到帧级、写细】碰撞瞬间逐步拆写让冲击可见：接触前（高速接近、对方未察觉）→接触瞬间（具体写自行车前轮/车头撞到对方身体哪个部位、对方如何反应：上身前倾/侧倾、踉跄迈出一步、双臂张开找平衡）→接触后（对方晃动后才站稳；骑车人因惯性前冲、单脚急撑地、车身歪斜急停）。力度真实可信（踉跄而非夸张飞出），但必须明确"发生了实打实的碰撞接触"，不要写成擦肩而过或提前刹停。
+【道具随撞击爆发】被叼/被拿的道具（如包子）必须在撞击那一刻因冲击被猛地弹飞、划抛物线落地，而非缓缓滑落。
+【道具归属一致，关键】角色随身的道具（尤其自己的自行车）在 beat 内与跨 beat 必须被合理处置：人物离开/进入下一地点时要带走或推着自己的车一起走，绝不能让车凭空消失，也不能无故把车丢在原地（除非剧本明确要求）。如"推着自行车快步跑进校门"要明确写出"一手扶把推车、一边快跑"。
+【剪切点必须接得上 — 相邻 beat 衔接，最高优先级】每个 beat（除第1个）的开场必须**严格承接上一个 beat 的结尾状态**：上一镜结尾时主角在画面什么位置、什么景别（远景/中景/近景）、朝向哪、正在做什么动作，本镜**开场就从那个状态接着开始**。同一主体、同一地点的连续动作尤其要对齐：景别、人物在画面里的大小与位置、朝向、正在进行的动作，都要和上一镜结尾一致，像同一条连续镜头被切成两段。例：上一镜结尾是"陈振飞推车背对镜头由近及远跑进林荫道深处（远景、人物很小）"，则本镜开场必须是"陈振飞推车背对镜头在林荫道中由近及远继续跑（同样远景、人物很小、同样朝里）"，绝不能突然切成他的近景侧脸。只有真正换场景/换地点才允许换景别，且用建立镜头平滑过渡。在每个 beat 的 first_frame_prompt 与 video_prompt 的【主体起始】里都要显式写出"承接上一镜结尾：……（上一镜结尾的景别/人物位置/朝向/动作）"。
+【目睹类镜头 + 跨 beat 衔接，关键 — 机位务必正确否则物理逻辑会塌】当某 beat 是一个角色从二楼/高处透过窗户目睹楼下另一个角色时，必须按下列方式写：(1) **机位用"过肩俯视"**：摄影机在观望者斜后方，越过其肩膀/侧脸朝窗外**向下俯视**；观望者**半背对或侧对镜头、面朝窗外**（绝不是正对镜头的肖像），前景是其肩头侧脸，中后景透过窗框是楼下校园；(2) **俯视透视**：二楼往下看，楼下被目睹者在画面中**位置偏低、个头较小、俯视压缩**，脚下是楼下林荫道地面而非与观望者同高的屋顶；窗外即上一镜那条林荫道；(3) 被目睹角色真实出现且**与上一个 beat 结尾状态严丝合缝衔接**（仍穿同款校服、推同一辆车、正小跑进校园），不换装换动作；(4) 观望者明确在**室内**：画面有教室内景线索（课桌椅一角、黑板、窗框）；(5) characters 同时列出"观望者"和"被目睹者"；(6) 两 beat 时间紧接、光线天气季节一致。video_prompt 分别交代窗内观望者的侧脸/神情变化与楼下被目睹者由远及近的连续动作。
+【方向与空间一致，关键】凡涉及"进入/前往某地"的动作，必须把运动方向写死且正确：人物朝目标（校门、校内、教学楼）由远及近接近并穿过、进入，越走越深入目标内部；**绝不能把"进学校"拍成背对校门朝校外街道越跑越远**。建议用镜头与朝向关系消除歧义（如"镜头在校门内侧朝外，人物从街道朝镜头跑来、穿过校门进入校园"，或"镜头从人物背后跟随，前方是敞开的校门与门内林荫道，他穿过校门朝教学楼跑去"），明确写"校门在他前方、他朝门里去"。
+【背景生活感】公共场所（校门口、街道、校园）的 beat 要在环境里写出可信的背景人物活动（如三三两两背书包往来、陆续进校门的学生），让画面有生活气息；但背景人物只能是模糊的次要群众，不抢主体、不与主角互动、不得是剧本里的具名角色。''';
+
+/// Derives ONE unified school/team uniform shared by every character. Cross-shot
+/// inconsistency's biggest root cause was each character getting a *different*
+/// outfit (the script invents a per-character 校服), so when cut together it
+/// looks like different worlds. We compute a single canonical uniform once and
+/// force every character sheet to wear exactly it (keeping only per-character
+/// face/hair/glasses/build).
+const _uniformSystemPrompt =
+    '''你是影视服装指导。如果剧本里的学生/团队角色应当穿统一制服（如同校学生穿同款校服），请根据剧本的年代、季节、地点设计**唯一一套**统一制服，全体相关角色完全一致。必须输出严格 JSON，不要多余文字：
+{"applicable": true, "uniform": "一句话精确描述这套统一制服：上衣款式与颜色、裤子/裙子款式与颜色、鞋子，要具体且唯一，不要给选项"}
+如果剧本角色本就不该穿统一制服（如不同身份的成年人），输出 {"applicable": false, "uniform": ""}。''';
 
 class PlanningAgent extends Agent {
   @override
@@ -515,6 +546,76 @@ ${memory.trim()}
 ''';
 }
 
+/// Build a concise global "style lock" from the brief. Injected verbatim into
+/// every generated image and video prompt so the whole short shares one era,
+/// palette, lighting and film texture — the single biggest lever for
+/// cross-shot visual coherence (characters/scenes drifting in look is the most
+/// visible continuity failure).
+String buildStyleLock(AgentContext context) {
+  final brief = _asStringDynamicMap(context.data['brief']);
+  if (brief == null) return '';
+  final parts = <String>[];
+  final vs = brief['visual_style']?.toString().trim();
+  final mood = brief['mood']?.toString().trim();
+  if (vs != null && vs.isNotEmpty) parts.add(_stripComposition(vs));
+  if (mood != null && mood.isNotEmpty) parts.add('情绪基调：$mood');
+  // Global look: cinematic semi-real. Must stay just under the "real person"
+  // moderation line so the previous shot's video can be fed back as
+  // reference_video (full photoreal video input is blocked; this look passes and
+  // still reads as realistic film, not animation).
+  parts.add('整体为2000年代怀旧电影胶片质感：粗颗粒胶片、轻微漏光与电影感暖调调色，'
+      '半写实电影质感（介于写实与手绘之间、明显是影视画面而非真实人物照片），'
+      '实景电影摄影感、自然光影与景深；非动画、非卡通、非3D渲染');
+  return parts.where((p) => p.trim().isNotEmpty).join('；');
+}
+
+/// The style lock must carry LOOK (era/palette/texture/lighting), NOT shot
+/// composition. Baking camera/composition gimmicks (e.g. "窗框构图/手持跟拍") into
+/// the global style forced every shot through a window; composition belongs
+/// per-beat, so drop those clauses here.
+String _stripComposition(String visualStyle) {
+  const drop = [
+    '窗框',
+    '构图',
+    '机位',
+    '运镜',
+    '跟拍',
+    '手持',
+    '景别',
+    '推拉',
+    '摇镜',
+    '俯拍',
+    '仰拍',
+    '视角',
+    '镜头运动',
+    '分屏',
+    // photoreal cues: a 纪实/超写实 push tips the render over the "real person"
+    // line and gets the beat's video blocked as a reference_video.
+    '纪实',
+    '写实',
+    '超写实',
+    '逼真',
+    '真实感',
+    '真人',
+    '实拍',
+    '高清写真'
+  ];
+  final clauses = visualStyle
+      .split(RegExp(r'[、，。/；;,]'))
+      .map((c) => c.trim())
+      .where((c) => c.isNotEmpty)
+      .where((c) => !drop.any(c.contains))
+      .toList();
+  return clauses.isEmpty ? visualStyle : clauses.join('、');
+}
+
+/// Prepend the style lock to an image/video prompt (no-op when empty).
+String withStyleLock(String styleLock, String prompt) {
+  if (styleLock.trim().isEmpty) return prompt;
+  return '【全局视觉风格锁 — 所有镜头的时代背景、画质、色调、光线、胶片质感必须严格统一】\n'
+      '$styleLock\n\n$prompt';
+}
+
 /// Format script as a readable scene-by-scene list for the storyboard LLM.
 /// This makes it much clearer than raw JSON what scenes, characters, and
 /// actions the storyboard must faithfully follow.
@@ -611,7 +712,9 @@ class AssetDesignAgent extends Agent {
   @override
   String get name => 'AssetDesignAgent';
 
-  final DashscopeService _dashscope = DashscopeService();
+  final MediaService _dashscope = MediaService();
+  final LlmService llm;
+  AssetDesignAgent({required this.llm});
 
   @override
   Future<AgentResult> run(AgentContext context) async {
@@ -637,6 +740,14 @@ class AssetDesignAgent extends Agent {
     final feedback = context.data['feedback'] as String?;
     final feedbackText = feedback != null ? '。修改建议：$feedback' : '';
     final memoryText = _creativeMemoryInstruction(context);
+    final styleLock = buildStyleLock(context);
+
+    // Derive one unified uniform so every character sheet matches (root cause of
+    // cross-shot inconsistency was each character getting a different outfit).
+    // Only meaningful when ≥2 characters could plausibly share a uniform.
+    final characterCount = assets.where((a) => a.type == 'character').length;
+    final uniform =
+        characterCount >= 2 ? await _deriveUniform(scriptData!) : '';
 
     int successCount = 0;
     int failCount = 0;
@@ -659,9 +770,10 @@ class AssetDesignAgent extends Agent {
       final enhancedPrompt = _buildAssetPrompt(
         prompt,
         asset.type,
-        scriptData,
+        styleLock,
         memoryText,
         feedbackText,
+        uniform,
       );
 
       try {
@@ -723,43 +835,79 @@ class AssetDesignAgent extends Agent {
   }
 
   /// Build enhanced image prompt for asset reference image generation.
-  /// Injects visual style from the brief to ensure consistency with the
-  /// overall project aesthetic.
+  ///
+  /// Two consistency levers are applied here:
+  /// 1. The global [styleLock] (era/palette/film texture) is prepended so every
+  ///    reference sheet — and therefore every downstream shot built on it —
+  ///    shares one look.
+  /// 2. Character/location sheets are framed as *clean anchor images* (neutral
+  ///    background, full body, even lighting). A clean sheet is a far better
+  ///    conditioning image for Qwen-Image-Edit than a busy in-scene shot, which
+  ///    is what keeps a character's identity stable across later keyframes.
+  /// Asks the LLM for one canonical uniform shared by all characters. Returns ''
+  /// when not applicable or on any failure (falls back to per-character outfits).
+  Future<String> _deriveUniform(Map<String, dynamic> scriptData) async {
+    try {
+      final response = await llm.chatCompletion(
+        messages: [
+          ChatMessage(role: 'system', content: _uniformSystemPrompt),
+          ChatMessage(role: 'user', content: '剧本：${jsonEncode(scriptData)}'),
+        ],
+        jsonMode: true,
+        temperature: 0.3,
+        requestTag: 'asset.uniform',
+      );
+      final decoded = _asStringDynamicMap(jsonDecode(response.content));
+      if (decoded == null) return '';
+      final applicable = decoded['applicable'];
+      if (applicable == false) return '';
+      return decoded['uniform']?.toString().trim() ?? '';
+    } catch (e) {
+      await AppLogger.warn(
+          'Uniform derivation failed, using per-character outfits',
+          error: e);
+      return '';
+    }
+  }
+
   String _buildAssetPrompt(
     String basePrompt,
     String assetType,
-    Map<String, dynamic>? scriptData,
+    String styleLock,
     String memoryText,
     String feedbackText,
+    String uniform,
   ) {
     final buffer = StringBuffer();
 
-    // Extract visual style from brief if available
-    final brief = scriptData?['brief'] as Map<String, dynamic>?;
-    if (brief != null) {
-      final visualStyle = brief['visual_style']?.toString();
-      if (visualStyle != null && visualStyle.isNotEmpty) {
-        buffer.writeln('整体视觉风格：$visualStyle');
-        buffer.writeln('');
-      }
-    }
-
     // Add type-specific framing with clear instructions
     if (assetType == 'character') {
-      buffer.writeln('[角色设计参考图]');
-      buffer.writeln('生成一张角色参考图，用于后续所有分镜和视频中该角色的外观一致性。');
-      buffer.writeln('必须严格按照角色描述生成，不得自由发挥或替换为其他物体。');
+      // Neutral identity sheet (standing front, arms down, no props/action) so
+      // it's a clean conditioning anchor — plus the unified uniform overriding
+      // whatever per-character outfit the script invented.
+      buffer.writeln('[角色设计参考图 / character reference sheet]');
+      buffer.writeln('生成一张角色设定图，用作后续所有分镜和视频中该角色外观一致性的锚点。');
+      buffer.writeln(
+          '要求：单人全身正面直立站立，双臂自然下垂贴身体两侧，中性表情平视镜头，不做任何动作、不拿任何道具、无座椅无背包；纯中性灰色无缝影棚背景，不要其他人物、不要复杂场景；均匀柔和光照，五官清晰，证件照式标准姿态。');
+      if (uniform.isNotEmpty) {
+        buffer.writeln('【统一制服，必须严格按此，忽略下方角色描述里任何不同的服装颜色款式】$uniform。');
+        buffer.writeln('【下方角色描述仅用于保留该角色的个人特征：脸型、发型、眼镜、体型，服装一律以上面的统一制服为准】');
+      } else {
+        buffer.writeln('必须严格按照角色描述生成，不得自由发挥或替换为其他物体。');
+      }
       buffer.writeln('');
       buffer.writeln('角色描述：$basePrompt');
     } else if (assetType == 'location') {
-      buffer.writeln('[场景设计参考图]');
-      buffer.writeln('生成一张场景参考图，用于后续所有分镜和视频中该场景的环境一致性。');
+      buffer.writeln('[场景设计参考图 / location establishing shot]');
+      buffer.writeln('生成一张场景建立镜头（空镜），用作后续该场景环境一致性的锚点。');
+      buffer.writeln('要求：画面中不要出现任何角色/人物，重点表现该地点的建筑、空间布局、光线与色调。');
       buffer.writeln('必须严格按照场景描述生成，不得自由发挥或替换为其他地点。');
       buffer.writeln('');
       buffer.writeln('场景描述：$basePrompt');
     } else if (assetType == 'prop') {
-      buffer.writeln('[道具设计参考图]');
+      buffer.writeln('[道具设计参考图 / prop reference]');
       buffer.writeln('生成一张道具参考图，用于后续所有分镜和视频中该道具的外观一致性。');
+      buffer.writeln('要求：道具居中、纯色/中性背景、清晰展示外形与材质。');
       buffer.writeln('必须严格按照道具描述生成，不得自由发挥或替换为其他物品。');
       buffer.writeln('');
       buffer.writeln('道具描述：$basePrompt');
@@ -772,7 +920,8 @@ class AssetDesignAgent extends Agent {
       buffer.write(_cleanImagePrompt(feedbackText, maxLength: 180));
     }
 
-    return _cleanImagePrompt(buffer.toString(), maxLength: 1400);
+    return withStyleLock(
+        styleLock, _cleanImagePrompt(buffer.toString(), maxLength: 1400));
   }
 
   String _cleanImagePrompt(String value, {int maxLength = 900}) {
@@ -801,7 +950,7 @@ class VideoAgent extends Agent {
   @override
   String get name => 'VideoAgent';
 
-  final DashscopeService _dashscope = DashscopeService();
+  final MediaService _dashscope = MediaService();
 
   @override
   Future<AgentResult> run(AgentContext context) async {
@@ -833,6 +982,7 @@ class VideoAgent extends Agent {
     final feedback = context.data['feedback'] as String?;
     final feedbackText = feedback != null ? '。修改建议：$feedback' : '';
     final memoryText = _creativeMemoryInstruction(context);
+    final styleLock = buildStyleLock(context);
 
     // ============================================================
     // Step 2: Generate videos with consistency anchors + continuity
@@ -844,6 +994,48 @@ class VideoAgent extends Agent {
     // Continuity: track the reference image from the previous shot
     String? continuityRefImage;
     int? lastSceneNum;
+
+    // Per-character ANCHOR clips (Ark): for each character we first generate ONE
+    // single-character, stylized clip that reliably passes reference_video
+    // moderation. Every story beat then references the anchors of its present
+    // characters (≤3), so each character's identity stays consistent across the
+    // film — a video "character sheet". This sidesteps two walls: (1) a realistic
+    // still as i2v first-frame is moderation-blocked, and (2) busy multi-character
+    // story beats themselves can't serve as reference_video, but clean single-
+    // character clips can. So we never feed images, and never rely on story beats
+    // as references.
+    final chainMode = AppConfig.useArkForVideo;
+    final anchorByChar =
+        <String, String>{}; // character name -> anchor clip url
+    if (chainMode) {
+      final names =
+          (consistencyAnchors['characterNames'] as List?)?.cast<String>() ??
+              const [];
+      final descByName = (consistencyAnchors['characterDescByName'] as Map?)
+              ?.map((k, v) => MapEntry(k.toString(), v.toString())) ??
+          const {};
+      for (final name in names) {
+        if (name.isEmpty) continue;
+        final anchorPrompt = withStyleLock(
+              styleLock,
+              '角色锚段，画面里只有一个高一男生（单人，绝无其他人物）：${descByName[name] ?? ''}。'
+              '他在校园林荫道上由远及近、神情自然地走向镜头，平视中近景，看清面部与全身，动作平缓自然',
+            ) +
+            memoryText;
+        try {
+          anchorByChar[name] = await _dashscope.generateVideo(
+            prompt: anchorPrompt,
+            firstFrameUrl: '',
+            duration: 5,
+          );
+          await AppLogger.info('Character anchor clip generated',
+              data: {'tag': 'video.anchor', 'character': name});
+        } catch (e) {
+          await AppLogger.warn('Character anchor clip failed',
+              data: {'character': name}, error: e);
+        }
+      }
+    }
 
     for (int i = 0; i < sorted.length; i++) {
       final sbMap = sorted[i];
@@ -863,26 +1055,40 @@ class VideoAgent extends Agent {
         continuityRefImage = null;
       }
 
+      // Which characters/props/location actually appear in THIS shot, matched
+      // by name against the shot's own text. This is the key to consistency:
+      // only the references truly present are passed to image-edit, so a
+      // single-character close-up never gets other characters' faces bled in.
+      final shotText = '$shotDescription\n$firstFramePrompt\n$videoPrompt';
+
       // Build enhanced image prompt (always used for reference image generation)
-      final enhancedImagePrompt = _enhanceImagePrompt(
-            consistencyAnchors,
-            sceneNum,
-            firstFramePrompt,
-            shotDescription,
+      final enhancedImagePrompt = withStyleLock(
+            styleLock,
+            _enhanceImagePrompt(
+              consistencyAnchors,
+              sceneNum,
+              firstFramePrompt,
+              shotDescription,
+              shotText,
+            ),
           ) +
           memoryText;
 
       // Build enhanced video prompt (injects visual context for video generation)
-      final enhancedVideoPrompt = _enhanceVideoPrompt(
-            consistencyAnchors,
-            sceneNum,
-            _withAdjacentShotContinuity(
-              current: sbMap,
-              previous: previousShot,
-              next: nextShot,
-              basePrompt: videoPrompt,
+      final enhancedVideoPrompt = withStyleLock(
+            styleLock,
+            _enhanceVideoPrompt(
+              consistencyAnchors,
+              sceneNum,
+              _withAdjacentShotContinuity(
+                current: sbMap,
+                previous: previousShot,
+                next: nextShot,
+                basePrompt: videoPrompt,
+              ),
+              shotDescription,
+              shotText,
             ),
-            shotDescription,
           ) +
           memoryText +
           feedbackText;
@@ -892,15 +1098,21 @@ class VideoAgent extends Agent {
       // Always regenerate to ensure consistency (skip only if already
       // has a URL, to save API calls for resume scenarios)
       // ============================================================
-      // Generate reference image with consistency anchors and canonical images
+      // Generate reference image with consistency anchors and canonical images.
+      // Skipped entirely in reference_video chain mode (no image inputs).
       String? refImageUrl = sbMap['reference_image_url'] as String?;
       String? refImageLocalPath =
           sbMap['reference_image_local_path'] as String?;
-      if ((refImageUrl == null || refImageUrl.isEmpty) &&
+      if (!chainMode &&
+          (refImageUrl == null || refImageUrl.isEmpty) &&
           enhancedImagePrompt.isNotEmpty) {
-        final refUrls = _getReferenceImageUrls(consistencyAnchors, sceneNum);
+        final refUrls = _selectRefsForShot(
+          consistencyAnchors,
+          sceneNum,
+          shotText,
+        );
         await AppLogger.info(
-          'Generating reference image with canonical reference images',
+          'Generating shot keyframe with per-shot reference images',
           data: {
             'storyboard_id': storyboardId,
             'scene': sceneNum,
@@ -925,19 +1137,21 @@ class VideoAgent extends Agent {
       }
 
       // ============================================================
-      // Choose first frame for video generation
-      // - New scene first shot: use own reference image
-      // - Same scene subsequent shot: use previous shot's reference
-      //   (adjacent-frame passing for temporal continuity)
+      // First frame for video generation: always this shot's OWN keyframe.
+      // The keyframe was generated with the correct per-shot references (and,
+      // for same-scene continuation shots, the previous keyframe as an anchor),
+      // so it already carries both the right composition and visual continuity.
+      // Starting i2v from the previous shot's image instead would force a wrong
+      // opening composition whenever the angle/subject changes.
       // ============================================================
-      final videoFirstFrame =
-          isNewScene ? refImageUrl : (continuityRefImage ?? refImageUrl);
+      final videoFirstFrame = refImageUrl;
 
       // ============================================================
       // Generate video
       // ============================================================
       try {
-        if (videoFirstFrame == null || videoFirstFrame.isEmpty) {
+        if (!chainMode &&
+            (videoFirstFrame == null || videoFirstFrame.isEmpty)) {
           clips.add({
             'storyboard_id': storyboardId,
             'state': 'failed',
@@ -945,13 +1159,30 @@ class VideoAgent extends Agent {
           });
           failCount++;
         } else {
-          final videoRefUrls =
-              _getReferenceImageUrls(consistencyAnchors, sceneNum);
+          // Chain mode: reference the ANCHOR clips of the present characters
+          // (≤3, deduped) — no image inputs. Otherwise: t2v with this shot's
+          // per-shot reference_image.
+          final presentChars = _charactersInShot(consistencyAnchors, shotText);
+          final refVideos = <String>[];
+          if (chainMode) {
+            for (final n in presentChars) {
+              final u = anchorByChar[n];
+              if (u != null && u.isNotEmpty && !refVideos.contains(u)) {
+                refVideos.add(u);
+              }
+              if (refVideos.length >= 3) break;
+            }
+          }
+          final videoRefUrls = chainMode
+              ? const <String>[]
+              : _selectRefsForShot(consistencyAnchors, sceneNum, shotText);
           final videoUrl = await _dashscope.generateVideo(
             prompt: enhancedVideoPrompt,
-            firstFrameUrl: videoFirstFrame,
+            firstFrameUrl: chainMode ? '' : (videoFirstFrame ?? ''),
             duration: duration,
             referenceImageUrls: videoRefUrls.isNotEmpty ? videoRefUrls : null,
+            referenceVideoUrls:
+                chainMode && refVideos.isNotEmpty ? refVideos : null,
           );
 
           clips.add({
@@ -959,6 +1190,7 @@ class VideoAgent extends Agent {
             'reference_image_url': refImageUrl,
             'reference_image_local_path': refImageLocalPath,
             'continuity_ref_image_url': isNewScene ? null : continuityRefImage,
+            'reference_video_urls': chainMode ? refVideos : null,
             'video_url': videoUrl,
             'state': 'completed',
           });
@@ -1045,241 +1277,292 @@ class VideoAgent extends Agent {
     return buffer.toString();
   }
 
-  /// Extracts character and scene consistency anchors from the script assets.
-  /// Includes both text descriptions (for prompt enhancement) and canonical
-  /// image URLs (from the asset design stage, if available).
+  /// Extracts character / location / prop consistency anchors from the script
+  /// assets, indexed BY NAME so each shot can pull only the references it
+  /// actually contains. Carries both text descriptions (for prompt enhancement)
+  /// and canonical image URLs (from the asset design stage, if available).
   Map<String, dynamic> _extractConsistencyAnchors(AgentContext context) {
     final scriptData = context.data['script'];
 
-    final characterDescs = <String>[];
-    final characterImages = <String>[];
-    final sceneLocations = <int, String>{};
-    final sceneImages = <int, String>{};
-    final propDescs = <String>[];
-    final propImages = <String>[];
+    final characterNames = <String>[];
+    final characterDescByName = <String, String>{};
+    final characterImageByName = <String, String>{};
+    final locationNames = <String>[];
+    final locationImages = <String>[]; // global, ordered
+    final locationImageByName = <String, String>{};
+    final locationDescByName = <String, String>{};
+    final sceneLocationText = <int, String>{};
+    final propNames = <String>[];
+    final propDescByName = <String, String>{};
+    final propImageByName = <String, String>{};
 
-    if (scriptData != null) {
-      Map<String, dynamic>? scriptMap;
-      if (scriptData is Map<String, dynamic>) {
-        scriptMap = scriptData;
-      } else if (scriptData is Map) {
-        scriptMap = Map<String, dynamic>.from(scriptData);
-      }
+    Map<String, dynamic>? scriptMap;
+    if (scriptData is Map<String, dynamic>) {
+      scriptMap = scriptData;
+    } else if (scriptData is Map) {
+      scriptMap = Map<String, dynamic>.from(scriptData);
+    }
 
-      if (scriptMap != null) {
-        // Extract character/location descriptions and canonical images from assets
-        final rawAssets = scriptMap['assets'];
-        if (rawAssets is List) {
-          for (final a in rawAssets) {
-            final m = _asStringDynamicMap(a);
-            if (m == null) continue;
-            final type = m['type']?.toString() ?? '';
-            final name = m['name']?.toString() ?? '';
-            final desc = m['description']?.toString() ?? '';
-            final refImage = m['reference_image_url']?.toString();
+    if (scriptMap != null) {
+      final rawAssets = scriptMap['assets'];
+      if (rawAssets is List) {
+        for (final a in rawAssets) {
+          final m = _asStringDynamicMap(a);
+          if (m == null) continue;
+          final type = m['type']?.toString() ?? '';
+          final name = m['name']?.toString().trim() ?? '';
+          final desc = m['description']?.toString() ?? '';
+          final refImage = m['reference_image_url']?.toString();
+          final hasImage = refImage != null &&
+              (refImage.startsWith('http://') ||
+                  refImage.startsWith('https://'));
+          if (name.isEmpty) continue;
 
-            if (type == 'character' && desc.isNotEmpty) {
-              characterDescs.add('$name: $desc');
-              if (refImage != null && refImage.isNotEmpty) {
-                characterImages.add('$name: $refImage');
-              }
+          if (type == 'character') {
+            characterNames.add(name);
+            if (desc.isNotEmpty) characterDescByName[name] = desc;
+            if (hasImage) characterImageByName[name] = refImage;
+          } else if (type == 'location') {
+            locationNames.add(name);
+            if (desc.isNotEmpty) locationDescByName[name] = desc;
+            if (hasImage) {
+              locationImages.add(refImage);
+              locationImageByName[name] = refImage;
             }
-            if (type == 'location' && desc.isNotEmpty) {
-              final sceneNum = m['scene_num'];
-              if (sceneNum is int) {
-                sceneLocations[sceneNum] = desc;
-                if (refImage != null && refImage.isNotEmpty) {
-                  sceneImages[sceneNum] = refImage;
-                }
-              }
-              if (refImage != null && refImage.isNotEmpty) {
-                // Location assets are usually not tied to a scene number in the
-                // DB, so include them as global visual references.
-                propImages.add('$name: $refImage');
-              }
-            }
-            if (type == 'prop' && desc.isNotEmpty) {
-              propDescs.add('$name: $desc');
-              if (refImage != null && refImage.isNotEmpty) {
-                propImages.add('$name: $refImage');
-              }
-            }
+          } else if (type == 'prop') {
+            propNames.add(name);
+            if (desc.isNotEmpty) propDescByName[name] = desc;
+            if (hasImage) propImageByName[name] = refImage;
           }
         }
+      }
 
-        // Also map scene_num to location from scenes array
-        final rawScenes = scriptMap['scenes'];
-        if (rawScenes is List) {
-          for (int i = 0; i < rawScenes.length; i++) {
-            final s = rawScenes[i];
-            Map<String, dynamic>? sm;
-            if (s is Map<String, dynamic>) {
-              sm = s;
-            } else if (s is Map) {
-              sm = Map<String, dynamic>.from(s);
-            }
-            if (sm != null) {
-              final sceneNum = (sm['scene_num'] as num?)?.toInt() ?? (i + 1);
-              final loc = sm['location']?.toString() ?? '';
-              final desc = sm['description']?.toString() ?? '';
-              if (!sceneLocations.containsKey(sceneNum) &&
-                  (loc.isNotEmpty || desc.isNotEmpty)) {
-                sceneLocations[sceneNum] = '$loc. $desc'.trim();
-              }
-            }
+      // Map scene_num -> location text from the scenes array (for prompt text).
+      final rawScenes = scriptMap['scenes'];
+      if (rawScenes is List) {
+        for (int i = 0; i < rawScenes.length; i++) {
+          final sm = _asStringDynamicMap(rawScenes[i]);
+          if (sm == null) continue;
+          final sceneNum = (sm['scene_num'] as num?)?.toInt() ?? (i + 1);
+          final loc = sm['location']?.toString() ?? '';
+          final desc = sm['description']?.toString() ?? '';
+          if (loc.isNotEmpty || desc.isNotEmpty) {
+            sceneLocationText[sceneNum] = '$loc. $desc'.trim();
           }
         }
       }
     }
 
     return {
-      'characterDescs': characterDescs.join('\n'),
-      'characterImages': characterImages.join('\n'),
-      'sceneLocations': sceneLocations,
-      'sceneImages': sceneImages,
-      'propDescs': propDescs.join('\n'),
-      'propImages': propImages.join('\n'),
+      'characterNames': characterNames,
+      'characterDescByName': characterDescByName,
+      'characterImageByName': characterImageByName,
+      'locationNames': locationNames,
+      'locationImages': locationImages,
+      'locationImageByName': locationImageByName,
+      'locationDescByName': locationDescByName,
+      'sceneLocationText': sceneLocationText,
+      'propNames': propNames,
+      'propDescByName': propDescByName,
+      'propImageByName': propImageByName,
     };
   }
 
-  /// Extract reference image URLs from anchors for a given scene.
-  /// Returns a list of URLs to pass to generateImage as reference images.
-  List<String> _getReferenceImageUrls(
-    Map<String, dynamic> anchors,
-    int sceneNum,
-  ) {
-    final urls = <String>[];
-
-    // Add all character canonical images
-    final charImages = anchors['characterImages'] as String?;
-    if (charImages != null && charImages.isNotEmpty) {
-      for (final line in charImages.split('\n')) {
-        final idx = line.indexOf(':');
-        if (idx > 0) {
-          final url = line.substring(idx + 1).trim();
-          if (url.isNotEmpty &&
-              (url.startsWith('http://') || url.startsWith('https://'))) {
-            urls.add(url);
-          }
-        }
-      }
-    }
-
-    // Add scene canonical image for this scene number
-    final sceneImages = anchors['sceneImages'] as Map<int, String>?;
-    if (sceneImages != null && sceneImages.containsKey(sceneNum)) {
-      final sceneUrl = sceneImages[sceneNum];
-      if (sceneUrl != null && sceneUrl.isNotEmpty) {
-        urls.add(sceneUrl);
-      }
-    }
-
-    // Add prop canonical images
-    final propImages = anchors['propImages'] as String?;
-    if (propImages != null && propImages.isNotEmpty) {
-      for (final line in propImages.split('\n')) {
-        final idx = line.indexOf(':');
-        if (idx > 0) {
-          final url = line.substring(idx + 1).trim();
-          if (url.isNotEmpty &&
-              (url.startsWith('http://') || url.startsWith('https://'))) {
-            urls.add(url);
-          }
-        }
-      }
-    }
-
-    return urls;
+  /// Names of the characters that actually appear in this shot, detected by
+  /// matching each character's script name against the shot's own text. Order
+  /// follows the script's asset order so selection is deterministic.
+  List<String> _charactersInShot(
+      Map<String, dynamic> anchors, String shotText) {
+    final names =
+        (anchors['characterNames'] as List?)?.cast<String>() ?? const [];
+    return [
+      for (final n in names)
+        if (n.isNotEmpty && shotText.contains(n)) n
+    ];
   }
 
-  /// Enhance the image generation prompt with consistency anchors.
-  /// Prepends global character + scene descriptions so the AI image
-  /// generator produces visually consistent reference images.
+  /// Choose ≤3 reference images for a shot — THE core consistency mechanism.
+  ///
+  /// Qwen-Image-Edit-2509 accepts at most 3 reference images, so passing every
+  /// character's sheet (the old behaviour) both overflowed the limit and bled
+  /// the wrong faces into single-character shots. Instead we pass only what is
+  /// in frame, prioritised so the most identity-critical anchors win the slots:
+  ///   1. the characters actually present (script order)
+  ///   2. this scene's location sheet (scene/look anchor)
+  ///   3. props present in the shot
+  /// Deduplicated and capped at 3.
+  ///
+  /// Note we deliberately do NOT use the previous shot's keyframe as a scene
+  /// anchor: when consecutive shots have different casts (e.g. a two-person
+  /// shot followed by a one-person close-up), the previous keyframe would drag
+  /// the absent character back into frame — the exact bleed we are removing.
+  /// Cross-shot continuity is instead carried by the shared character/location
+  /// sheets plus the global style lock.
+  List<String> _selectRefsForShot(
+    Map<String, dynamic> anchors,
+    int sceneNum,
+    String shotText,
+  ) {
+    const maxRefs = 3;
+    final out = <String>[];
+    void add(String? url) {
+      if (url == null) return;
+      if (!(url.startsWith('http://') || url.startsWith('https://'))) return;
+      if (out.length >= maxRefs || out.contains(url)) return;
+      out.add(url);
+    }
+
+    // 1. Characters present in this shot.
+    final charImages =
+        (anchors['characterImageByName'] as Map?)?.cast<String, String>() ??
+            const {};
+    for (final name in _charactersInShot(anchors, shotText)) {
+      add(charImages[name]);
+    }
+
+    // 2. Scene/look anchor: this scene's location sheet.
+    add(_locationImageForShot(anchors, shotText));
+
+    // 3. Props present in this shot.
+    final propImages =
+        (anchors['propImageByName'] as Map?)?.cast<String, String>() ??
+            const {};
+    final propNames =
+        (anchors['propNames'] as List?)?.cast<String>() ?? const [];
+    for (final name in propNames) {
+      if (name.isNotEmpty && shotText.contains(name)) add(propImages[name]);
+    }
+
+    return out;
+  }
+
+  /// Best location sheet for a shot: prefer a location whose name is mentioned
+  /// in the shot, otherwise fall back to the only/first known location sheet.
+  String? _locationImageForShot(Map<String, dynamic> anchors, String shotText) {
+    final byName =
+        (anchors['locationImageByName'] as Map?)?.cast<String, String>() ??
+            const {};
+    for (final entry in byName.entries) {
+      if (entry.key.isNotEmpty && shotText.contains(entry.key)) {
+        return entry.value;
+      }
+    }
+    final all =
+        (anchors['locationImages'] as List?)?.cast<String>() ?? const [];
+    return all.isNotEmpty ? all.first : null;
+  }
+
+  /// Character description lines to inject into a prompt — only for the
+  /// characters present in this shot (fallback: all) so the generator is not
+  /// told about people who shouldn't be in frame.
+  String _characterDescsForShot(Map<String, dynamic> anchors, String shotText) {
+    final descByName =
+        (anchors['characterDescByName'] as Map?)?.cast<String, String>() ??
+            const {};
+    var present = _charactersInShot(anchors, shotText);
+    if (present.isEmpty) present = descByName.keys.toList();
+    final lines = [
+      for (final n in present)
+        if (descByName[n] != null) '$n: ${descByName[n]}'
+    ];
+    return lines.join('\n');
+  }
+
+  /// Enhance the image generation prompt with consistency anchors, scoped to
+  /// the characters/location/props that appear in this shot.
   String _enhanceImagePrompt(
     Map<String, dynamic> anchors,
     int sceneNum,
     String firstFramePrompt,
     String shotDescription,
+    String shotText,
   ) {
     if (firstFramePrompt.isEmpty) return '';
 
     final buffer = StringBuffer();
 
-    // Global character consistency anchor
-    final charDescs = anchors['characterDescs'] as String?;
-    if (charDescs != null && charDescs.isNotEmpty) {
-      buffer.writeln('[角色外观一致性参考]');
+    // ACTION FIRST. The keyframe becomes the first frame of the i2v clip, so it
+    // must already show the shot's action/pose — not a neutral standing pose.
+    // The character reference sheets are clean standing shots, and image-edit
+    // tends to copy that pose; left unchecked the keyframe shows the character
+    // standing and the video then has to invent the motion from a static frame,
+    // which produces melting limbs / objects appearing from nowhere. So we lead
+    // with the action and explicitly scope the references to identity only.
+    buffer.writeln('[本镜头画面与动作 — 最高优先级，必须据此决定人物姿态、动作与构图]');
+    if (shotDescription.isNotEmpty) buffer.writeln(shotDescription);
+    buffer.writeln(firstFramePrompt);
+    buffer.writeln('');
+
+    final charDescs = _characterDescsForShot(anchors, shotText);
+    if (charDescs.isNotEmpty) {
+      buffer.writeln('[本镜头出场角色 — 参考图/描述仅用于保持长相、发型、服装一致]');
+      buffer.writeln('（仅限以下角色，不要加入其他角色；人物的姿态、动作、朝向、镜头角度必须按上面的画面描述，'
+          '不要套用参考图里的站立或静止姿势。）');
       buffer.writeln(charDescs);
       buffer.writeln('');
     }
 
-    // Scene-specific location anchor
-    final sceneLocations = anchors['sceneLocations'] as Map<int, String>?;
+    final sceneLocations =
+        (anchors['sceneLocationText'] as Map?)?.cast<int, String>();
     if (sceneLocations != null && sceneLocations.containsKey(sceneNum)) {
       buffer.writeln('[场景环境参考]');
       buffer.writeln(sceneLocations[sceneNum]);
       buffer.writeln('');
     }
 
-    // Prop anchor
-    final propDescs = anchors['propDescs'] as String?;
-    if (propDescs != null && propDescs.isNotEmpty) {
+    final propDescs = _propDescsForShot(anchors, shotText);
+    if (propDescs.isNotEmpty) {
       buffer.writeln('[道具参考]');
       buffer.writeln(propDescs);
-      buffer.writeln('');
     }
-
-    // Shot-specific description
-    if (shotDescription.isNotEmpty) {
-      buffer.writeln('[当前镜头画面]');
-      buffer.writeln(shotDescription);
-      buffer.writeln('');
-    }
-
-    // Original detailed prompt
-    buffer.writeln('[详细画面生成提示]');
-    buffer.writeln(firstFramePrompt);
 
     return buffer.toString();
   }
 
-  /// Enhance the video generation prompt with visual context from
-  /// consistency anchors. The video model sees character/scene descriptions
-  /// alongside the motion instructions for more coherent output.
+  /// Prop description lines for the props present in this shot.
+  String _propDescsForShot(Map<String, dynamic> anchors, String shotText) {
+    final descByName =
+        (anchors['propDescByName'] as Map?)?.cast<String, String>() ?? const {};
+    final lines = [
+      for (final e in descByName.entries)
+        if (e.key.isNotEmpty && shotText.contains(e.key)) '${e.key}: ${e.value}'
+    ];
+    return lines.join('\n');
+  }
+
+  /// Enhance the video generation prompt with visual context, scoped to this
+  /// shot's characters/location/props.
   String _enhanceVideoPrompt(
     Map<String, dynamic> anchors,
     int sceneNum,
     String videoPrompt,
     String shotDescription,
+    String shotText,
   ) {
     if (videoPrompt.isEmpty) return shotDescription;
 
     final buffer = StringBuffer();
 
-    // Character context for video
-    final charDescs = anchors['characterDescs'] as String?;
-    if (charDescs != null && charDescs.isNotEmpty) {
-      buffer.writeln('角色外观参考：$charDescs');
+    final charDescs = _characterDescsForShot(anchors, shotText);
+    if (charDescs.isNotEmpty) {
+      buffer.writeln('本镜头出场角色外观参考（仅限以下角色）：$charDescs');
     }
 
-    // Scene context for video
-    final sceneLocations = anchors['sceneLocations'] as Map<int, String>?;
+    final sceneLocations =
+        (anchors['sceneLocationText'] as Map?)?.cast<int, String>();
     if (sceneLocations != null && sceneLocations.containsKey(sceneNum)) {
       buffer.writeln('场景环境参考：${sceneLocations[sceneNum]}');
     }
 
-    // Prop context for video
-    final propDescs = anchors['propDescs'] as String?;
-    if (propDescs != null && propDescs.isNotEmpty) {
+    final propDescs = _propDescsForShot(anchors, shotText);
+    if (propDescs.isNotEmpty) {
       buffer.writeln('道具参考：$propDescs');
     }
 
-    // Shot description
     if (shotDescription.isNotEmpty) {
       buffer.writeln('镜头画面：$shotDescription');
     }
 
-    // Original motion prompt
     buffer.writeln('动画要求：$videoPrompt');
 
     return buffer.toString();

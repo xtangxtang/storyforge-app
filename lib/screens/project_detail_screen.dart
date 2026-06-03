@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import '../config/app_config.dart';
 import '../db/dao/dao.dart';
 import '../models/models.dart';
-import '../services/dashscope_service.dart';
+import '../services/media_service.dart';
 import '../services/app_logger.dart';
 import '../services/llm_service.dart';
 import '../services/persistent_image_store.dart';
@@ -178,7 +178,7 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
   /// Falls back to single-image mode if sequential returns wrong count.
   Future<void> _startImageGeneration() async {
     if (_storyboards.isEmpty) return;
-    final dashscope = DashscopeService();
+    final dashscope = MediaService();
 
     setState(() {
       _imageReviewMode = true;
@@ -324,7 +324,7 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
     }
 
     final sb = _storyboards[_currentImageIndex];
-    final dashscope = DashscopeService();
+    final dashscope = MediaService();
 
     setState(() {
       _imageGenerating = true;
@@ -528,7 +528,7 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
     });
 
     try {
-      final dashscope = DashscopeService();
+      final dashscope = MediaService();
 
       for (int i = 0; i < _storyboards.length; i++) {
         if (!mounted) return;
@@ -722,7 +722,7 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
     });
 
     try {
-      final videoUrl = await DashscopeService().generateVideo(
+      final videoUrl = await MediaService().generateVideo(
         prompt: sb.videoPrompt ?? '',
         firstFrameUrl: imageUrl,
         duration: sb.duration ?? 5,
@@ -909,7 +909,7 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
     });
 
     try {
-      final dashscope = DashscopeService();
+      final dashscope = MediaService();
 
       for (final sb in _storyboards) {
         if (!mounted) return;
@@ -978,7 +978,7 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
     });
 
     try {
-      final dashscope = DashscopeService();
+      final dashscope = MediaService();
       int count = 0;
 
       for (final clip in failedClips) {
@@ -1055,7 +1055,7 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
     });
 
     try {
-      final dashscope = DashscopeService();
+      final dashscope = MediaService();
       int total = _storyboards.length;
       int success = 0;
 

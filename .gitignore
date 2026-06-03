@@ -43,3 +43,14 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+ark_test/
+videos/
+ark_e2e/
+
+# Local secrets/config override (API keys). Edit config.local.json with your
+# keys; it is loaded at startup and overrides the active profile. Never commit.
+config.local.json
+
+# Generated media (images + videos) from pipeline runs.
+generated/

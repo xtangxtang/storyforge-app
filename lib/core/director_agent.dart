@@ -410,7 +410,7 @@ $wikiContext''';
   DirectorAgent({required this.llm})
       : planningAgent = PlanningAgent(llm: llm),
         scriptAgent = ScriptAgent(llm: llm),
-        assetDesignAgent = AssetDesignAgent(),
+        assetDesignAgent = AssetDesignAgent(llm: llm),
         productionAgent = ProductionAgent(llm: llm),
         videoAgent = VideoAgent();
 

@@ -18,8 +18,7 @@ class AgentResult<T> {
   factory AgentResult.error(String message) =>
       AgentResult(success: false, error: message);
 
-  factory AgentResult.success(T data) =>
-      AgentResult(success: true, data: data);
+  factory AgentResult.success(T data) => AgentResult(success: true, data: data);
 }
 
 abstract class Agent {

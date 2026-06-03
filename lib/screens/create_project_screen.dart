@@ -10,7 +10,7 @@ import '../models/models.dart';
 import '../core/director_agent.dart';
 import '../core/agent.dart';
 import '../services/llm_service.dart';
-import '../services/dashscope_service.dart' as dashscope;
+import '../services/media_service.dart' as media;
 import '../services/app_logger.dart';
 import '../services/persistent_image_store.dart';
 import '../services/project_wiki_store.dart';
@@ -1076,58 +1076,9 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
               });
             }
 
-            // Inject asset reference images into storyboards for video generation.
-            // VideoAgent reads these from script assets, so we must ensure they
-            // are populated here before the video stage runs.
-            final scriptData =
-                _agentCtx!.data['script'] as Map<String, dynamic>?;
-            if (scriptData != null) {
-              final assetsWithImages = scriptData['assets'] as List?;
-              if (assetsWithImages is List && assetsWithImages.isNotEmpty) {
-                // Build a map of asset name -> reference image URL
-                final assetImageMap = <String, String>{};
-                for (final a in assetsWithImages) {
-                  String? name;
-                  String? refUrl;
-                  if (a is Asset) {
-                    name = a.name;
-                    refUrl = a.referenceImageUrl;
-                  } else if (a is Map<String, dynamic>) {
-                    name = a['name'] as String?;
-                    refUrl = a['reference_image_url'] as String?;
-                  }
-                  if (name != null &&
-                      name.isNotEmpty &&
-                      refUrl != null &&
-                      refUrl.isNotEmpty) {
-                    assetImageMap[name] = refUrl;
-                  }
-                }
-
-                // Attach asset reference images to storyboards
-                final rawStoryboards = storyboardData['storyboards'] as List?;
-                if (rawStoryboards is List) {
-                  for (final sb in rawStoryboards) {
-                    if (sb is Map<String, dynamic>) {
-                      final desc = sb['description'] as String? ?? '';
-                      final firstFramePrompt =
-                          sb['first_frame_prompt'] as String? ?? '';
-                      final combined = '$desc $firstFramePrompt';
-                      // Find which asset names are mentioned in this storyboard
-                      final mentionedAssets = <String>[];
-                      for (final entry in assetImageMap.entries) {
-                        if (combined.contains(entry.key)) {
-                          mentionedAssets.add(entry.value);
-                        }
-                      }
-                      if (mentionedAssets.isNotEmpty) {
-                        sb['assets'] = jsonEncode(mentionedAssets);
-                      }
-                    }
-                  }
-                }
-              }
-            }
+            // Per-shot reference-image selection now lives in VideoAgent
+            // (_selectRefsForShot), which matches each shot's text against the
+            // script assets at generation time. No need to pre-attach refs here.
 
             stage.finalData = storyboardData;
             if (storyboards != null) {
@@ -2516,7 +2467,7 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
     setState(() {});
 
     try {
-      final imageService = dashscope.DashscopeService();
+      final imageService = media.MediaService();
       final imageUrl = await imageService.generateImage(enhancedPrompt);
       final localPath = await PersistentImageStore().persistRemoteImage(
         imageUrl,

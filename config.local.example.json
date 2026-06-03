@@ -1,0 +1,11 @@
+{
+  "_README": "复制本文件为 config.local.json（已被 gitignore），填入你的密钥。应用启动时读取，非空值覆盖当前 Profile。至少填 arkApiKey。",
+
+  "arkApiKey": "ark-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+  "arkBaseUrl": "https://ark.cn-beijing.volces.com/api/plan/v3",
+  "arkImageModel": "doubao-seedream-5.0-lite",
+  "arkVideoModel": "doubao-seedance-2.0",
+
+  "llmApiKey": "sk-...",
+  "httpsProxy": ""
+}
