@@ -1,85 +1,46 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Storyforge 现在是 **LLM-native 短视频生成工作区**，不是 Flutter/Dart 桌面 App。
 
-## Project Overview
+## 核心模型
 
-Storyforge is an **AI-powered short video production tool** built with Flutter (primary target: Windows desktop). Users enter a creative prompt and the app orchestrates a pipeline of 5 AI agents to produce a 1-2 minute video:
-
-```
-Creative Input -> Planning -> Scripting -> Storyboarding -> Image Generation -> Video Generation -> Final Cut
+```text
+已有剧本 -> skill 编排 -> stage/review 文件 -> 视觉锚点 -> 关键帧 -> Ark 图生视频
 ```
 
-A `DirectorAgent` reviews each stage's output with an LLM-based scoring loop and retries (up to 3x) if quality is insufficient.
+项目状态保存在 `projects/<project-id>/`。LLM、CLI 或人工操作者都可以直接调用 skill，并在每个阶段审阅和修改产物。
 
-## Key Commands
+## 常用命令
 
 ```bash
-flutter pub get                          # Install dependencies
-flutter run -d windows                   # Run on Windows desktop
-flutter run -d <device>                  # Run on another platform
-flutter build windows --release          # Build Windows release
-flutter build apk --release              # Build release APK
-dart analyze                             # Run static analysis
-flutter test                             # Run all tests
-flutter test test/widget_test.dart       # Run a single test
+python -m compileall storyforge
+python -m storyforge.cli list-skills
+python -m storyforge.cli --project demo pipeline-from-script --script path/to/script.md
+python -m storyforge.cli --project demo pipeline-from-script --script path/to/script.md --with-media
 ```
 
-Windows build environment setup: `.\setup-windows-build-env.ps1`
-Windows build script: `.\build-windows.ps1`
+## 重要目录
 
-## Architecture
+- `storyforge/`：Python 运行时代码。
+- `storyforge_skills/*/SKILL.md`：skill 契约。
+- `projects/<project-id>/`：运行时项目工作区，默认不提交。
+- `generated/`：历史/实验生成产物，可参考但不是新架构源状态。
+- `config.local.example.json`：本地密钥模板。
 
-### Layered Structure
+## 默认 Skill
 
-```
-Screens (UI) -> Core (Agents/Business Logic) -> Services (External APIs) -> DB (Persistence)
-                                            -> Models (Data)         -> DB (Persistence)
-```
+- `script_ingest`
+- `asset_design`
+- `storyboard_plan`
+- `atomic_shot_plan`
+- `keyframe_generate`
+- `video_generate_ark`
 
-| Directory | Purpose |
-|-----------|---------|
-| `lib/config/` | API key/URL configuration via `shared_preferences` |
-| `lib/core/` | Agent system: base `Agent`, concrete agents, `DirectorAgent` orchestrator |
-| `lib/db/` | SQLite database (`AppDatabase`) + DAO layer (one class per table) |
-| `lib/models/` | Data models: `Project`, `Brief`, `Script`, `Scene`, `Asset`, `Storyboard`, `VideoClip`, `FinalCut` |
-| `lib/screens/` | 4 UI screens: `ProjectListScreen`, `CreateProjectScreen`, `ProjectDetailScreen`, `SettingsScreen` |
-| `lib/services/` | `LlmService` (chat completions), `DashscopeService` (image/video gen), `AppLogger` |
+新增能力优先新增 skill，而不是新增 App screen 或 Dart service。
 
-### Agent Pattern
+## 约定
 
-- `Agent` (abstract base in `lib/core/agent.dart`): defines `name`, `run(AgentContext)`, `review()`, `retry()`
-- `AgentContext`: carries `projectId` and a `Map<String, dynamic>` data bag between stages
-- `AgentResult<T>`: wraps success/failure with typed data
-- `DirectorAgent` (`lib/core/director_agent.dart`): orchestrator that composes `PlanningAgent`, `ScriptAgent`, and `ProductionAgent`. Implements `runStageWithReview()` — generate, LLM-score (1-10), retry with feedback if score < 6, max 3 retries
-- Workflow stages: `planning` -> `scripting` -> `asseting` -> `storyboarding` -> `generating` -> `cutting` -> `done`
-
-### AI/LLM Integration
-
-- **LLM**: `qwen3.6-plus` via `https://coding.dashscope.aliyuncs.com/v1` (OpenAI-compatible `/chat/completions`)
-- **Image gen**: `wan2.7-image` via DashScope multimodal-generation (async, 5s polling, up to 120 polls)
-- **Video gen**: `wan2.7-i2v` via DashScope video-synthesis (image-to-video, 720P, async polling)
-- **HTTP proxy**: configurable via settings for enterprise networks
-
-### Navigation & State Management
-
-- **Navigation**: Manual `Navigator.push` / `Navigator.pushReplacement`. `MaterialApp` with hardcoded `home: HomeScreen` (bottom nav with Projects/Settings tabs).
-- **State**: Screens use `setState`. No Riverpod providers are actively used in screens despite being a dependency.
-
-### Database
-
-- SQLite via `sqflite_common_ffi` (desktop FFI support, not mobile `sqflite`)
-- 8 tables: projects, briefs, scripts, assets, storyboards, video_clips, final_cuts, tasks
-- DAO layer: one class per table (`ProjectDao`, `BriefDao`, etc.) with CRUD methods
-- DAOs instantiate `AppDatabase` directly — no dependency injection
-
-## Important Notes
-
-- **Unused dependencies**: `riverpod`/`flutter_riverpod` and `go_router` are declared in `pubspec.yaml` but not used in actual code. Don't assume they're wired up.
-- **No dependency injection**: Services and DAOs are instantiated with `new` throughout.
-- **Logging**: `AppLogger` writes to `%LOCALAPPDATA%\Storyforge\logs\storyforge.log` on Windows with structured text entries.
-- **Dart SDK**: `^3.6.2`, Flutter 3.27+
-
-## User Preferences
-
-- **Language**: Always respond in Chinese (中文). This applies to all conversations, code explanations, and project discussions.
+- 用中文与用户沟通。
+- 不恢复 Flutter/Dart 文件，除非用户明确要求。
+- 不提交 `config.local.json`、`projects/`、媒体产物或缓存。
+- 分镜连续性依赖原子镜头、首尾关键帧、角色/地点锚点和前后镜头上下文，不依赖随机九宫格。

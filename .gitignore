@@ -1,56 +1,40 @@
-# Miscellaneous
-*.class
+# Local secrets
+config.local.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+env/
+*.egg-info/
+dist/
+build/
+
+# Runtime project workspaces and generated media
+projects/
+generated/
+ark_test/
+ark_e2e/
+videos/
+
+# Logs and OS/editor files
 *.log
-*.pyc
-*.swp
 .DS_Store
-.atom/
-.build/
-.buildlog/
-.history
-.svn/
-.swiftpm/
-migrate_working_dir/
-
-# IntelliJ related
-*.iml
-*.ipr
-*.iws
+Thumbs.db
+*.swp
 .idea/
+*.iml
 
-# The .vscode folder contains launch configuration and tasks you configure in
-# VS Code which you may wish to be included in version control, so this line
-# is commented out by default.
-#.vscode/
-
-# Flutter/Dart/Pub related
-**/doc/api/
-**/ios/Flutter/.last_build_id
+# Legacy tool caches, in case old checkouts still have them locally
 .dart_tool/
 .flutter-plugins
 .flutter-plugins-dependencies
 .pub-cache/
 .pub/
-/build/
-
-# Symbolication related
-app.*.symbols
-
-# Obfuscation related
-app.*.map.json
-
-# Android Studio will place build artifacts here
-/android/app/debug
-/android/app/profile
-/android/app/release
-
-ark_test/
-videos/
-ark_e2e/
-
-# Local secrets/config override (API keys). Edit config.local.json with your
-# keys; it is loaded at startup and overrides the active profile. Never commit.
-config.local.json
-
-# Generated media (images + videos) from pipeline runs.
-generated/

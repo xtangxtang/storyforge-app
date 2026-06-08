@@ -1,11 +1,14 @@
 {
-  "_README": "复制本文件为 config.local.json（已被 gitignore），填入你的密钥。应用启动时读取，非空值覆盖当前 Profile。至少填 arkApiKey。",
+  "_README": "复制为 config.local.json 并填入本地密钥。config.local.json 已被 gitignore 忽略，不要提交。",
 
-  "arkApiKey": "ark-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+  "llmBaseUrl": "https://coding.dashscope.aliyuncs.com/v1",
+  "llmApiKey": "sk-...",
+  "llmModel": "qwen3.6-plus",
+
   "arkBaseUrl": "https://ark.cn-beijing.volces.com/api/plan/v3",
+  "arkApiKey": "ark-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
   "arkImageModel": "doubao-seedream-5.0-lite",
   "arkVideoModel": "doubao-seedance-2.0",
 
-  "llmApiKey": "sk-...",
   "httpsProxy": ""
 }
