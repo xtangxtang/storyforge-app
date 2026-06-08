@@ -10,12 +10,12 @@ from .skills import SkillContext, SkillRegistry, SkillResult, write_review_markd
 
 class DocumentIngestSkill:
     id = "document_ingest"
-    description = "Extract script text from txt, markdown, docx, or pdf documents into raw/script.md."
+    description = "从 txt、markdown、docx 或 pdf 剧本文档中抽取文本，写入 raw/script.md。"
 
     def run(self, ctx: SkillContext, input_data: dict[str, Any]) -> SkillResult:
         document_path = input_data.get("document_path") or input_data.get("path") or input_data.get("script_path")
         if not document_path:
-            return SkillResult(False, "Missing document_path", {})
+            return SkillResult(False, "缺少 document_path", {})
         extracted = extract_document_text(Path(str(document_path)))
         source_dir = ctx.workspace.raw_dir / "source"
         source_dir.mkdir(parents=True, exist_ok=True)
@@ -36,14 +36,14 @@ class DocumentIngestSkill:
             "raw_script_path": "raw/script.md",
         }
         ctx.workspace.write_stage("00_document.json", out)
-        write_review_markdown(ctx.workspace.review_dir / "00_document_ingest.md", "Document Ingest Review", out)
-        ctx.workspace.append_log("Document ingested", {"source": extracted["source_name"], "characters": extracted["character_count"]})
-        return SkillResult(True, "document ingested", {"file": "stages/00_document.json", "raw_script_path": "raw/script.md"})
+        write_review_markdown(ctx.workspace.review_dir / "00_document_ingest.md", "文档导入审阅", out)
+        ctx.workspace.append_log("文档已导入", {"source": extracted["source_name"], "characters": extracted["character_count"]})
+        return SkillResult(True, "文档已导入", {"file": "stages/00_document.json", "raw_script_path": "raw/script.md"})
 
 
 class ScriptIngestSkill:
     id = "script_ingest"
-    description = "Normalize a provided script into scenes/assets without rewriting the story."
+    description = "在不改写故事的前提下，把剧本规范化为场景、角色、地点和道具。"
 
     def run(self, ctx: SkillContext, input_data: dict[str, Any]) -> SkillResult:
         script_text = (input_data.get("script_text") or "").strip()
@@ -53,36 +53,36 @@ class ScriptIngestSkill:
         if not script_text and ctx.workspace.raw_dir.joinpath("script.md").exists():
             script_text = ctx.workspace.raw_dir.joinpath("script.md").read_text(encoding="utf-8")
         if not script_text:
-            return SkillResult(False, "Missing script_text or script_path", {})
+            return SkillResult(False, "缺少 script_text 或 script_path", {})
 
         ctx.workspace.raw_dir.joinpath("script.md").write_text(script_text, encoding="utf-8")
         data = ctx.llm.chat_json(
-            "You are Storyforge script_ingest. Structure the user's existing script into strict JSON without changing story, characters, locations, dialogue, or event order. Output JSON with scenes and assets. Each scene has scene_num, location, description, action, dialogue, duration. Each asset has type character|location|prop, name, description.",
+            "你是 Storyforge 的 script_ingest。请在不改变故事、角色、地点、对白和事件顺序的前提下，把用户已有剧本整理成严格 JSON。输出包含 scenes 和 assets。每个 scene 包含 scene_num, location, description, action, dialogue, duration。每个 asset 包含 type(character|location|prop), name, description。所有字段值和说明必须使用简体中文。",
             script_text,
             temperature=0.2,
             tag=self.id,
         )
         data.setdefault("source", self.id)
         ctx.workspace.write_stage("01_script.json", data)
-        write_review_markdown(ctx.workspace.review_dir / "01_script.md", "Script Ingest Review", data)
-        ctx.workspace.append_log("Script ingested", {"scenes": len(data.get("scenes", [])), "assets": len(data.get("assets", []))})
-        return SkillResult(True, "script ingested", {"file": "stages/01_script.json"})
+        write_review_markdown(ctx.workspace.review_dir / "01_script.md", "剧本结构化审阅", data)
+        ctx.workspace.append_log("剧本已结构化", {"scenes": len(data.get("scenes", [])), "assets": len(data.get("assets", []))})
+        return SkillResult(True, "剧本已结构化", {"file": "stages/01_script.json"})
 
 
 class StyleSelectSkill:
     id = "style_select"
-    description = "Ask the user to choose a production style and persist the selected style profile."
+    description = "询问用户选择生产风格，并持久化选定的风格档案。"
 
     def run(self, ctx: SkillContext, input_data: dict[str, Any]) -> SkillResult:
         script = ctx.workspace.read_stage("01_script.json")
         if not script:
-            return SkillResult(False, "No script found in stages/01_script.json", {})
+            return SkillResult(False, "未找到 stages/01_script.json 中的剧本结构化结果", {})
 
         selected = str(input_data.get("style") or input_data.get("style_id") or "").strip()
         custom_note = str(input_data.get("style_note") or input_data.get("custom_style") or "").strip()
         existing = ctx.workspace.read_stage("00_style.json")
         if not selected and existing.get("status") == "selected" and not input_data.get("force_prompt"):
-            return SkillResult(True, "style already selected", {"file": "stages/00_style.json", "style": existing.get("style", {}).get("id")})
+            return SkillResult(True, "风格已选择", {"file": "stages/00_style.json", "style": existing.get("style", {}).get("id")})
         options = style_options()
         options_by_id = {option["id"]: option for option in options}
 
@@ -92,11 +92,11 @@ class StyleSelectSkill:
                 "status": "awaiting_selection",
                 "prompt": "请选择本片的生产风格。后续所有角色设计、分镜、原子镜头、关键帧 prompt 和视频 prompt 都会按该风格构建。",
                 "options": options,
-                "how_to_continue": "Run style_select with one of the option ids, for example: {\"style\":\"film\"}.",
+                "how_to_continue": "请用一个风格 id 继续，例如：{\"style\":\"film\"}。",
             }
             ctx.workspace.write_stage("00_style.json", out)
-            write_review_markdown(ctx.workspace.review_dir / "00_style_select.md", "Style Selection Prompt", out)
-            return SkillResult(True, "awaiting style selection", {"file": "stages/00_style.json", "awaiting_user_selection": True})
+            write_review_markdown(ctx.workspace.review_dir / "00_style_select.md", "风格选择提示", out)
+            return SkillResult(True, "等待用户选择风格", {"file": "stages/00_style.json", "awaiting_user_selection": True})
 
         profile = options_by_id.get(selected)
         if profile is None:
@@ -105,9 +105,9 @@ class StyleSelectSkill:
                 "label": selected,
                 "description": custom_note or selected,
                 "visual_rules": [custom_note or selected],
-                "storyboard_rules": ["Follow the user's custom style consistently across all stages."],
-                "prompt_rules": ["Inject the custom style into every visual and video prompt."],
-                "avoid": ["Do not drift into a different genre or platform language."],
+                "storyboard_rules": ["所有阶段都要稳定遵守用户自定义风格。"],
+                "prompt_rules": ["每个视觉 prompt 和视频 prompt 都要明确注入该自定义风格。"],
+                "avoid": ["不要漂移到其他类型或平台语言。"],
             }
         if custom_note:
             profile = {**profile, "user_note": custom_note}
@@ -118,27 +118,27 @@ class StyleSelectSkill:
             "style": profile,
             "prompt_contract": {
                 "applies_to": ["asset_design", "storyboard_plan", "atomic_shot_plan", "keyframe_plan", "keyframe_generate_ark", "video_generate_ark"],
-                "rule": "All downstream prompts must explicitly preserve this style profile unless the user changes it.",
+                "rule": "除非用户修改风格，否则所有后续 prompt 都必须明确遵守该风格档案。",
             },
         }
         ctx.workspace.write_stage("00_style.json", out)
         ctx.workspace.wiki_dir.joinpath("style.md").write_text(format_style_markdown(profile), encoding="utf-8")
-        write_review_markdown(ctx.workspace.review_dir / "00_style_select.md", "Style Selection Review", out)
-        ctx.workspace.append_log("Style selected", {"style": profile.get("id"), "label": profile.get("label")})
-        return SkillResult(True, "style selected", {"file": "stages/00_style.json", "style": profile.get("id")})
+        write_review_markdown(ctx.workspace.review_dir / "00_style_select.md", "风格选择审阅", out)
+        ctx.workspace.append_log("风格已选择", {"style": profile.get("id"), "label": profile.get("label")})
+        return SkillResult(True, "风格已选择", {"file": "stages/00_style.json", "style": profile.get("id")})
 
 
 class AssetDesignSkill:
     id = "asset_design"
-    description = "Design visual anchors and reusable image prompts for characters, locations, and props."
+    description = "为角色、地点和道具设计稳定的视觉锚点与可复用图片提示词。"
 
     def run(self, ctx: SkillContext, input_data: dict[str, Any]) -> SkillResult:
         script = ctx.workspace.read_stage("01_script.json")
         assets = list(script.get("assets") or [])
         if not assets:
-            return SkillResult(False, "No assets found in stages/01_script.json", {})
+            return SkillResult(False, "stages/01_script.json 中没有找到 assets", {})
         data = ctx.llm.chat_json(
-            "You are Storyforge asset_design. Output strict JSON {assets:[...]}. For each provided asset, preserve type/name/description and add visual_anchor_prompt, negative_prompt, and consistency_notes. Prompts must be concrete enough for image generation, not poster-like, not a collage, and must preserve identity/clothing/location details across later shots. You must follow the selected Style Profile from workspace context.",
+            "你是 Storyforge 的 asset_design。输出严格 JSON：{assets:[...]}。对每个 asset 保留 type/name/description，并补充 visual_anchor_prompt、negative_prompt、consistency_notes。提示词必须足够具体，便于图片生成；不要海报感、拼贴感或设定集排版；必须保持身份、服装、地点细节在后续镜头中稳定。必须遵守 workspace context 中的 Style Profile。所有字段值和说明必须使用简体中文。",
             f"Workspace context:\n{ctx.workspace.context_pack()}\n\nAssets:\n{json.dumps(assets, ensure_ascii=False)}",
             temperature=float(input_data.get("temperature", 0.2)),
             tag=self.id,
@@ -149,30 +149,30 @@ class AssetDesignSkill:
                 {
                     **asset,
                     "visual_anchor_prompt": (
-                        f"Stable production reference for {asset.get('type', 'asset')} {asset.get('name', '')}. "
-                        f"{asset.get('description', '')}. Clear reusable identity, no poster, no collage."
+                        f"{asset.get('type', 'asset')} {asset.get('name', '')} 的稳定制作参考。"
+                        f"{asset.get('description', '')}。身份清晰、可复用，不要海报，不要拼贴。"
                     ),
-                    "negative_prompt": "poster, collage, text sheet, UI, inconsistent costume",
-                    "consistency_notes": "Use as identity/location anchor for later keyframes.",
+                    "negative_prompt": "海报、拼贴、文字设定表、UI、服装不一致",
+                    "consistency_notes": "作为后续关键帧的人物/地点身份锚点使用。",
                 }
                 for asset in assets
             ]
         out = {"source": self.id, "assets": designed}
         ctx.workspace.write_stage("02_assets.json", out)
-        write_review_markdown(ctx.workspace.review_dir / "02_assets.md", "Asset Design Review", out)
-        return SkillResult(True, "asset prompts designed", {"file": "stages/02_assets.json", "count": len(designed)})
+        write_review_markdown(ctx.workspace.review_dir / "02_assets.md", "视觉资产设计审阅", out)
+        return SkillResult(True, "视觉资产提示词已设计", {"file": "stages/02_assets.json", "count": len(designed)})
 
 
 class StoryboardPlanSkill:
     id = "storyboard_plan"
-    description = "Create reviewable storyboard beats from the structured script and workspace memory."
+    description = "基于结构化剧本和项目记忆生成可审阅的分镜节拍。"
 
     def run(self, ctx: SkillContext, input_data: dict[str, Any]) -> SkillResult:
         script = ctx.workspace.read_stage("01_script.json")
         if not script.get("scenes"):
-            return SkillResult(False, "No scenes found in stages/01_script.json", {})
+            return SkillResult(False, "stages/01_script.json 中没有找到 scenes", {})
         data = ctx.llm.chat_json(
-            "You are Storyforge storyboard_plan. Create strict JSON {storyboards:[...]}. Each beat has id, scene_num, shot_num, location, duration 3-8, characters, props, description, first_frame_prompt, video_prompt, continuity. Preserve story. Split hard physical actions into smaller beats or cutaways. Every beat and prompt must follow the selected Style Profile from workspace context.",
+            "你是 Storyforge 的 storyboard_plan。创建严格 JSON：{storyboards:[...]}。每个分镜节拍包含 id, scene_num, shot_num, location, duration(3-8秒), characters, props, description, first_frame_prompt, video_prompt, continuity。必须保留原故事。复杂物理动作要拆成更小节拍或切镜。每个节拍和 prompt 都必须遵守 workspace context 中的 Style Profile。所有字段值和说明必须使用简体中文。",
             f"Workspace context:\n{ctx.workspace.context_pack()}\n\nScript JSON:\n{json.dumps(script, ensure_ascii=False)}",
             temperature=float(input_data.get("temperature", 0.25)),
             tag=self.id,
@@ -182,21 +182,21 @@ class StoryboardPlanSkill:
             sb.setdefault("id", f"sb_{idx:03d}")
         out = {"source": self.id, "storyboards": storyboards}
         ctx.workspace.write_stage("03_storyboards.json", out)
-        write_review_markdown(ctx.workspace.review_dir / "03_storyboards.md", "Storyboard Review", out)
-        return SkillResult(True, "storyboards planned", {"file": "stages/03_storyboards.json", "count": len(storyboards)})
+        write_review_markdown(ctx.workspace.review_dir / "03_storyboards.md", "分镜计划审阅", out)
+        return SkillResult(True, "分镜计划已生成", {"file": "stages/03_storyboards.json", "count": len(storyboards)})
 
 
 class AtomicShotPlanSkill:
     id = "atomic_shot_plan"
-    description = "Split storyboard beats into physically plausible atomic shots with start/end states."
+    description = "把分镜节拍拆成具有明确起止状态、物理逻辑可信的原子镜头。"
 
     def run(self, ctx: SkillContext, input_data: dict[str, Any]) -> SkillResult:
         boards = ctx.workspace.read_stage("03_storyboards.json")
         storyboards = list(boards.get("storyboards") or [])
         if not storyboards:
-            return SkillResult(False, "No storyboards found", {})
+            return SkillResult(False, "没有找到 storyboards", {})
         data = ctx.llm.chat_json(
-            "You are Storyforge atomic_shot_plan. Output strict JSON {atomic_shots:[...]}. Each atomic shot has id, storyboard_id, duration, purpose, first_frame_prompt, last_frame_prompt, video_prompt, continuity_state_start, continuity_state_end, reference_asset_names. One action intent per shot. Use cutaways for collisions and other hard physics. Adjacent shots must share states. Every image/video prompt must follow the selected Style Profile from workspace context.",
+            "你是 Storyforge 的 atomic_shot_plan。输出严格 JSON：{atomic_shots:[...]}。每个原子镜头包含 id, storyboard_id, duration, purpose, first_frame_prompt, last_frame_prompt, video_prompt, continuity_state_start, continuity_state_end, reference_asset_names。每个镜头只承载一个动作意图。碰撞等困难物理动作优先使用切镜。相邻镜头必须共享连续状态。所有图片/视频 prompt 都必须遵守 workspace context 中的 Style Profile。所有字段值和说明必须使用简体中文。",
             f"Workspace context:\n{ctx.workspace.context_pack()}\n\nStoryboards:\n{json.dumps(storyboards, ensure_ascii=False)}",
             temperature=0.2,
             tag=self.id,
@@ -206,18 +206,18 @@ class AtomicShotPlanSkill:
             atom.setdefault("id", f"atom_{idx:03d}")
         out = {"source": self.id, "atomic_shots": atoms}
         ctx.workspace.write_stage("04_atomic_shots.json", out)
-        write_review_markdown(ctx.workspace.review_dir / "04_atomic_shots.md", "Atomic Shot Review", out)
-        return SkillResult(True, "atomic shots planned", {"file": "stages/04_atomic_shots.json", "count": len(atoms)})
+        write_review_markdown(ctx.workspace.review_dir / "04_atomic_shots.md", "原子镜头审阅", out)
+        return SkillResult(True, "原子镜头已生成", {"file": "stages/04_atomic_shots.json", "count": len(atoms)})
 
 
 class KeyframePlanSkill:
     id = "keyframe_plan"
-    description = "Plan first/last keyframe image tasks for Codex-assisted image generation."
+    description = "为 Codex 图片生成规划每个原子镜头的首帧/尾帧任务。"
 
     def run(self, ctx: SkillContext, input_data: dict[str, Any]) -> SkillResult:
         atoms = list(ctx.workspace.read_stage("04_atomic_shots.json").get("atomic_shots") or [])
         if not atoms:
-            return SkillResult(False, "No atomic shots found", {})
+            return SkillResult(False, "没有找到 atomic_shots", {})
         asset_context = load_asset_context(ctx)
         style_context = load_style_context(ctx)
         tasks = []
@@ -234,27 +234,37 @@ class KeyframePlanSkill:
                     "video_prompt": atom.get("video_prompt", ""),
                     "first_frame_prompt": frame_prompt(str(atom.get("first_frame_prompt", "")), named_assets, style_context),
                     "last_frame_prompt": frame_prompt(str(atom.get("last_frame_prompt", "")), named_assets, style_context),
-                    "first_frame_local_path": str(first_path),
-                    "last_frame_local_path": str(last_path),
+                    "first_frame_local_path": first_path.as_posix(),
+                    "last_frame_local_path": last_path.as_posix(),
                     "status": "needs_codex_image_generation",
                 }
             )
-        out = {"source": self.id, "image_provider": "codex", "keyframe_tasks": tasks}
+        out = {
+            "source": self.id,
+            "image_provider": "codex",
+            "prompt_contract": {
+                "style_reference": "wiki/style.md",
+                "asset_reference": "stages/02_assets.json",
+                "prompt_budget_chars": 800,
+                "rule": "每条首尾帧 prompt 只保留镜头画面、核心动作、物理/方向/光影约束；完整风格和资产锚点由全局引用提供。",
+            },
+            "keyframe_tasks": tasks,
+        }
         ctx.workspace.write_stage("05_keyframe_plan.json", out)
-        write_review_markdown(ctx.workspace.review_dir / "05_keyframe_plan.md", "Keyframe Plan Review", out)
-        return SkillResult(True, "keyframe image tasks planned", {"file": "stages/05_keyframe_plan.json", "count": len(tasks)})
+        write_review_markdown(ctx.workspace.review_dir / "05_keyframe_plan.md", "关键帧任务审阅", out)
+        return SkillResult(True, "关键帧图片任务已规划", {"file": "stages/05_keyframe_plan.json", "count": len(tasks)})
 
 
 class KeyframeImportSkill:
     id = "keyframe_import"
-    description = "Import Codex-created local keyframe images into stages/05_keyframes.json."
+    description = "把 Codex 生成的本地关键帧图片导入 stages/05_keyframes.json。"
 
     def run(self, ctx: SkillContext, input_data: dict[str, Any]) -> SkillResult:
         plan = ctx.workspace.read_stage("05_keyframe_plan.json")
         tasks = list(plan.get("keyframe_tasks") or [])
         explicit_images = normalize_keyframe_images(input_data.get("images") or input_data.get("keyframes") or [])
         if not tasks and not explicit_images:
-            return SkillResult(False, "No keyframe plan or input images found", {})
+            return SkillResult(False, "没有找到关键帧计划或输入图片", {})
 
         imported = []
         missing = []
@@ -262,7 +272,7 @@ class KeyframeImportSkill:
         for row in source_rows:
             atom_id = str(row.get("atomic_shot_id") or row.get("id") or "")
             if not atom_id:
-                missing.append({"reason": "missing atomic_shot_id", "row": row})
+                missing.append({"reason": "缺少 atomic_shot_id", "row": row})
                 continue
             explicit = explicit_images.get(atom_id, {}) if isinstance(explicit_images, dict) else {}
             first_path = resolve_workspace_path(ctx, explicit.get("first_frame_local_path") or row.get("first_frame_local_path"))
@@ -290,64 +300,214 @@ class KeyframeImportSkill:
 
         out = {"source": self.id, "image_provider": "codex", "keyframes": imported, "missing": missing}
         ctx.workspace.write_stage("05_keyframes.json", out)
-        write_review_markdown(ctx.workspace.review_dir / "05_keyframes.md", "Keyframe Import Review", out)
+        write_review_markdown(ctx.workspace.review_dir / "05_keyframes.md", "关键帧导入审阅", out)
         ok = len(imported) > 0 and not missing
-        message = "keyframes imported" if ok else "keyframe import incomplete"
+        message = "关键帧已导入" if ok else "关键帧导入不完整"
         return SkillResult(ok, message, {"file": "stages/05_keyframes.json", "imported": len(imported), "missing": len(missing)})
 
 
 class KeyframeGenerateArkSkill:
     id = "keyframe_generate_ark"
-    description = "Optional fallback: generate first/last control frames via Ark image generation."
+    description = "备用路径：通过 Ark 图片生成首帧/尾帧控制图。"
 
     def run(self, ctx: SkillContext, input_data: dict[str, Any]) -> SkillResult:
-        atoms = list(ctx.workspace.read_stage("04_atomic_shots.json").get("atomic_shots") or [])
-        if not atoms:
-            return SkillResult(False, "No atomic shots found", {})
+        plan = ctx.workspace.read_stage("05_keyframe_plan.json")
+        tasks = list(plan.get("keyframe_tasks") or [])
+        if not tasks:
+            atoms = list(ctx.workspace.read_stage("04_atomic_shots.json").get("atomic_shots") or [])
+            tasks = keyframe_tasks_from_atoms(ctx, atoms)
+        if not tasks:
+            return SkillResult(False, "没有找到关键帧任务，请先运行 keyframe_plan", {})
+
+        start_index = max(0, int(input_data.get("start_index") or 0))
+        limit = max(0, int(input_data.get("limit") or input_data.get("max_items") or 0))
+        only_ids = normalize_id_filter(input_data.get("atomic_shot_ids") or input_data.get("ids"))
+        overwrite = bool(input_data.get("overwrite"))
+        selected_tasks = [task for task in tasks if not only_ids or str(task.get("atomic_shot_id")) in only_ids]
+        selected_tasks = selected_tasks[start_index:]
+        if limit:
+            selected_tasks = selected_tasks[:limit]
+
+        existing = {
+            str(item.get("atomic_shot_id")): item
+            for item in ctx.workspace.read_stage("05_keyframes.json").get("keyframes", [])
+            if item.get("atomic_shot_id")
+        }
         asset_context = load_asset_context(ctx)
         style_context = load_style_context(ctx)
-        keyframes = []
-        for atom in atoms:
-            atom_id = str(atom.get("id"))
-            named_assets = [asset_context[n] for n in atom.get("reference_asset_names", []) if n in asset_context]
-            refs = [str(asset["reference_image_url"]) for asset in named_assets if asset.get("reference_image_url")]
-            first_url = ctx.ark.generate_image(
-                frame_prompt(str(atom.get("first_frame_prompt", "")), named_assets, style_context),
-                refs=refs,
-            )
-            first_path = ctx.ark.download(first_url, ctx.workspace.keyframes_dir / f"{safe_name(atom_id)}_first.png")
-            last_url = ctx.ark.generate_image(
-                frame_prompt(str(atom.get("last_frame_prompt", "")), named_assets, style_context),
-                refs=[first_url, *refs],
-            )
-            last_path = ctx.ark.download(last_url, ctx.workspace.keyframes_dir / f"{safe_name(atom_id)}_last.png")
-            keyframes.append(
-                {
+        generated = 0
+        skipped = 0
+        failed = 0
+        task_order = [str(task.get("atomic_shot_id")) for task in tasks]
+
+        for task in selected_tasks:
+            atom_id = str(task.get("atomic_shot_id"))
+            named_assets = [asset_context[n] for n in task.get("reference_asset_names", []) if n in asset_context]
+            refs = [
+                *continuity_reference_urls(task_order, existing, atom_id),
+                *[str(asset["reference_image_url"]) for asset in named_assets if asset.get("reference_image_url")],
+            ]
+            first_path = resolve_workspace_path(ctx, task.get("first_frame_local_path")) or ctx.workspace.keyframes_dir / f"{safe_name(atom_id)}_first.png"
+            last_path = resolve_workspace_path(ctx, task.get("last_frame_local_path")) or ctx.workspace.keyframes_dir / f"{safe_name(atom_id)}_last.png"
+            current = dict(existing.get(atom_id) or {})
+            can_skip = first_path.exists() and last_path.exists() and not overwrite
+            if can_skip:
+                skipped += 1
+                existing[atom_id] = {
+                    **current,
                     "atomic_shot_id": atom_id,
-                    "storyboard_id": atom.get("storyboard_id"),
-                    "duration": atom.get("duration", 5),
-                    "video_prompt": atom.get("video_prompt", ""),
+                    "storyboard_id": task.get("storyboard_id"),
+                    "duration": task.get("duration", 5),
+                    "video_prompt": task.get("video_prompt", ""),
+                    "first_frame_local_path": str(first_path),
+                    "last_frame_local_path": str(last_path),
+                    "image_provider": "ark",
+                    "state": "ready",
+                }
+                continue
+            try:
+                first_url = ctx.ark.generate_image(ark_image_prompt(str(task.get("first_frame_prompt", "")), atom_id), refs=refs)
+                ctx.ark.download(first_url, first_path)
+                last_url = ctx.ark.generate_image(ark_image_prompt(str(task.get("last_frame_prompt", "")), atom_id), refs=[first_url, *refs])
+                ctx.ark.download(last_url, last_path)
+                generated += 1
+                existing[atom_id] = {
+                    "atomic_shot_id": atom_id,
+                    "storyboard_id": task.get("storyboard_id"),
+                    "duration": task.get("duration", 5),
+                    "video_prompt": task.get("video_prompt", ""),
                     "first_frame_url": first_url,
                     "first_frame_local_path": str(first_path),
                     "last_frame_url": last_url,
                     "last_frame_local_path": str(last_path),
                     "image_provider": "ark",
+                    "state": "ready",
                 }
-            )
-        out = {"source": self.id, "image_provider": "ark", "keyframes": keyframes}
+            except Exception as exc:
+                failed += 1
+                existing[atom_id] = {
+                    **current,
+                    "atomic_shot_id": atom_id,
+                    "storyboard_id": task.get("storyboard_id"),
+                    "duration": task.get("duration", 5),
+                    "video_prompt": task.get("video_prompt", ""),
+                    "first_frame_local_path": str(first_path),
+                    "last_frame_local_path": str(last_path),
+                    "image_provider": "ark",
+                    "state": "failed",
+                    "error": str(exc),
+                }
+
+        keyframes = [existing[str(task.get("atomic_shot_id"))] for task in tasks if str(task.get("atomic_shot_id")) in existing]
+        out = {
+            "source": self.id,
+            "image_provider": "ark",
+            "mode": "text_to_image",
+            "keyframes": keyframes,
+            "success": sum(item.get("state") == "ready" for item in keyframes),
+            "failed": sum(item.get("state") == "failed" for item in keyframes),
+            "total_planned": len(tasks),
+        }
         ctx.workspace.write_stage("05_keyframes.json", out)
-        write_review_markdown(ctx.workspace.review_dir / "05_keyframes.md", "Keyframe Review", out)
-        return SkillResult(True, "keyframes generated", {"file": "stages/05_keyframes.json", "count": len(keyframes)})
+        write_review_markdown(ctx.workspace.review_dir / "05_keyframes.md", "关键帧生成审阅", out)
+        ok = generated > 0 or skipped > 0
+        return SkillResult(
+            ok,
+            "关键帧生成流程已完成" if ok else "关键帧生成失败",
+            {"file": "stages/05_keyframes.json", "generated": generated, "skipped": skipped, "failed": failed, "success": out["success"], "total_planned": len(tasks)},
+        )
+
+
+def keyframe_tasks_from_atoms(ctx: SkillContext, atoms: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    asset_context = load_asset_context(ctx)
+    style_context = load_style_context(ctx)
+    tasks = []
+    for atom in atoms:
+        atom_id = str(atom.get("id"))
+        named_assets = [asset_context[n] for n in atom.get("reference_asset_names", []) if n in asset_context]
+        first_path = Path("keyframes") / f"{safe_name(atom_id)}_first.png"
+        last_path = Path("keyframes") / f"{safe_name(atom_id)}_last.png"
+        tasks.append(
+            {
+                "atomic_shot_id": atom_id,
+                "storyboard_id": atom.get("storyboard_id"),
+                "duration": atom.get("duration", 5),
+                "video_prompt": atom.get("video_prompt", ""),
+                "first_frame_prompt": frame_prompt(str(atom.get("first_frame_prompt", "")), named_assets, style_context),
+                "last_frame_prompt": frame_prompt(str(atom.get("last_frame_prompt", "")), named_assets, style_context),
+                "first_frame_local_path": first_path.as_posix(),
+                "last_frame_local_path": last_path.as_posix(),
+                "reference_asset_names": atom.get("reference_asset_names", []),
+            }
+        )
+    return tasks
+
+
+def normalize_id_filter(value: Any) -> set[str]:
+    if not value:
+        return set()
+    if isinstance(value, str):
+        return {item.strip() for item in value.split(",") if item.strip()}
+    if isinstance(value, list):
+        return {str(item).strip() for item in value if str(item).strip()}
+    return set()
+
+
+def continuity_reference_urls(task_order: list[str], existing: dict[str, dict[str, Any]], atom_id: str) -> list[str]:
+    if atom_id not in task_order:
+        return []
+    index = task_order.index(atom_id)
+    refs: list[str] = []
+    for previous_id in reversed(task_order[:index]):
+        previous = existing.get(previous_id) or {}
+        if previous.get("state") != "ready":
+            continue
+        for key in ["last_frame_url", "first_frame_url"]:
+            url = str(previous.get(key) or "").strip()
+            if url and url not in refs:
+                refs.append(url)
+        if refs:
+            break
+    return refs[:2]
+
+
+def ark_image_prompt(prompt: str, atom_id: str) -> str:
+    constraints = [
+        "Ark text-to-image hard constraints: vertical 9:16 cinematic realistic control frame.",
+        "Do not render readable Chinese or English text anywhere; all school gate signs, plaques, labels, uniforms, papers, and posters must be blank, hidden by shadow, cropped out, or too defocused to read.",
+        "No watermark, no logo, no subtitles, no captions, no UI, no poster layout, no collage.",
+    ]
+    if atom_id == "AS001":
+        constraints.append(
+            "All visible students and parents must move from the outside road into the campus entrance; nobody should appear to be leaving the school."
+        )
+    if atom_id == "AS002":
+        constraints.append(
+            "This shot starts as a low-angle close-up of the fast spinning bicycle front wheel and pedals, then may rise to Chen Zhenfei riding anxiously. Keep a strong sense of speed from wheel rotation, pedal force, and road shadows."
+        )
+        constraints.append(
+            "The bicycle must move from the outside road toward the school entrance in the deep background. The front wheel and handlebar must point toward the campus gate, not sideways across the frame and not away from school."
+        )
+        constraints.append(
+            "The school gate must match the AS001 reference image: the same gray-white stone entrance, the same broad blank horizontal sign panel, the same retractable gate and camphor trees. Do not replace it with a different modern gate, blue billboard, vertical sign pillar, or new architecture."
+        )
+        constraints.append(
+            "The school gate can be distant or partly out of frame, but if visible it must stay the same gate from the reference and its sign must not contain readable characters."
+        )
+        constraints.append(
+            "Chen Zhenfei must wear a realistic blue-and-white summer school uniform with dark navy or black trousers and dark shoes. Do not give him white pants, white tracksuit bottoms, athletic training pants, or a full sports tracksuit."
+        )
+    return prompt + "\n\n" + "\n".join(constraints)
 
 
 class VideoGenerateArkSkill:
     id = "video_generate_ark"
-    description = "Generate Ark Seedance clips from keyframes."
+    description = "基于已确认关键帧，通过 Ark Seedance 生成视频片段。"
 
     def run(self, ctx: SkillContext, input_data: dict[str, Any]) -> SkillResult:
         keyframes = list(ctx.workspace.read_stage("05_keyframes.json").get("keyframes") or [])
         if not keyframes:
-            return SkillResult(False, "No keyframes found", {})
+            return SkillResult(False, "没有找到 keyframes", {})
         clips = []
         previous: str | None = None
         style_context = load_style_context(ctx)
@@ -355,7 +515,7 @@ class VideoGenerateArkSkill:
             try:
                 first_frame = str(kf.get("first_frame_url") or kf.get("first_frame_local_path") or "")
                 if not first_frame:
-                    raise ValueError(f"Missing first frame for {kf.get('atomic_shot_id')}")
+                    raise ValueError(f"{kf.get('atomic_shot_id')} 缺少首帧")
                 url = ctx.ark.generate_video(
                     video_prompt_with_style(str(kf.get("video_prompt", "")), style_context),
                     first_frame,
@@ -369,22 +529,22 @@ class VideoGenerateArkSkill:
                 clips.append({**kf, "state": "failed", "error": str(exc)})
         out = {"source": self.id, "clips": clips, "success": sum(c.get("state") == "ready" for c in clips), "failed": sum(c.get("state") == "failed" for c in clips)}
         ctx.workspace.write_stage("06_videos.json", out)
-        write_review_markdown(ctx.workspace.review_dir / "06_videos.md", "Video Review", out)
-        return SkillResult(True, "video generation completed", {"file": "stages/06_videos.json", "success": out["success"], "failed": out["failed"]})
+        write_review_markdown(ctx.workspace.review_dir / "06_videos.md", "视频生成审阅", out)
+        return SkillResult(True, "视频生成流程已完成", {"file": "stages/06_videos.json", "success": out["success"], "failed": out["failed"]})
 
 
 class KnowledgeCaptureSkill:
     id = "knowledge_capture"
-    description = "Capture approved storyboard, shot, style, or prompt patterns into project/global knowledge cards."
+    description = "把已确认的分镜、镜头、风格或 prompt 模式沉淀为项目级/全局知识卡。"
 
     def run(self, ctx: SkillContext, input_data: dict[str, Any]) -> SkillResult:
         source_text, source_ref = resolve_capture_source(ctx, input_data)
         if not source_text.strip():
-            return SkillResult(False, "Missing source_text, source_stage, or source_file", {})
+            return SkillResult(False, "缺少 source_text、source_stage 或 source_file", {})
 
         scope = str(input_data.get("scope") or "project").lower()
         if scope not in {"project", "global", "both"}:
-            return SkillResult(False, "scope must be project, global, or both", {})
+            return SkillResult(False, "scope 必须是 project、global 或 both", {})
 
         tags = input_data.get("tags") or []
         if isinstance(tags, str):
@@ -393,7 +553,7 @@ class KnowledgeCaptureSkill:
         title_hint = str(input_data.get("title") or "").strip()
 
         data = ctx.llm.chat_json(
-            "You are Storyforge knowledge_capture. Extract durable reusable production knowledge from an approved result. Output strict JSON {cards:[...]}. Each card has title, type, tags, summary, when_to_use, do, avoid, prompt_patterns, examples, source_refs. Capture what should be reused, what mistakes to avoid, and concrete prompt/camera/action patterns. Do not praise. Do not copy long source text.",
+            "你是 Storyforge 的 knowledge_capture。请从已确认产物中提炼可长期复用的制作知识。输出严格 JSON：{cards:[...]}。每张卡包含 title, type, tags, summary, when_to_use, do, avoid, prompt_patterns, examples, source_refs。要捕捉可复用做法、应避免错误、具体 prompt/摄影/动作模式。不要空泛夸奖，不要大段复制原文。所有字段值必须使用简体中文。",
             (
                 f"Title hint: {title_hint}\n"
                 f"User note: {user_note}\n"
@@ -408,10 +568,10 @@ class KnowledgeCaptureSkill:
         if not cards:
             cards = [
                 {
-                    "title": title_hint or "Captured production pattern",
+                    "title": title_hint or "捕获的制作模式",
                     "type": "style",
                     "tags": tags,
-                    "summary": user_note or "Reusable production pattern captured from an approved Storyforge result.",
+                    "summary": user_note or "从已确认 Storyforge 产物中捕获的可复用制作模式。",
                     "when_to_use": [],
                     "do": [],
                     "avoid": [],
@@ -435,9 +595,9 @@ class KnowledgeCaptureSkill:
 
         review = {"source": self.id, "source_ref": source_ref, "scope": scope, "cards": cards, "written": written}
         ctx.workspace.write_stage("07_knowledge_capture.json", review)
-        write_review_markdown(ctx.workspace.review_dir / "07_knowledge_capture.md", "Knowledge Capture Review", review)
-        ctx.workspace.append_log("Knowledge captured", {"source_ref": source_ref, "scope": scope, "cards": len(cards)})
-        return SkillResult(True, "knowledge captured", {"file": "stages/07_knowledge_capture.json", "cards": len(cards), "written": written})
+        write_review_markdown(ctx.workspace.review_dir / "07_knowledge_capture.md", "知识捕获审阅", review)
+        ctx.workspace.append_log("知识已捕获", {"source_ref": source_ref, "scope": scope, "cards": len(cards)})
+        return SkillResult(True, "知识已捕获", {"file": "stages/07_knowledge_capture.json", "cards": len(cards), "written": written})
 
 
 def default_registry() -> SkillRegistry:
@@ -480,28 +640,53 @@ def load_style_context(ctx: SkillContext) -> str:
 def frame_prompt(prompt: str, assets: list[dict[str, Any]] | None = None, style_context: str = "") -> str:
     asset_lines = []
     for asset in assets or []:
-        asset_lines.append(
-            f"- {asset.get('type', 'asset')} {asset.get('name', '')}: "
-            f"{asset.get('description', '')} "
-            f"Visual anchor: {asset.get('visual_anchor_prompt', '')} "
-            f"Consistency: {asset.get('consistency_notes', '')}"
-        )
+        asset_lines.append(asset_prompt_line(asset))
     asset_context = "\n".join(asset_lines)
+    asset_names = "、".join(str(asset.get("name", "")).strip() for asset in assets or [] if str(asset.get("name", "")).strip())
     base = (
-        "Vertical 9:16 cinematic control frame for image-to-video. Preserve identity, clothing, props, location, "
-        "movement direction, and physical state. No poster, no chart, no UI, no text sheet, no collage.\n\n"
+        "竖屏9:16图生视频控制帧；电影写实风格；无文字、无品牌、无UI、无拼贴。"
+        "保持人物身份、服装、道具、地点、运动方向和物理状态连续。\n"
     )
     if style_context:
-        base += f"Selected Style Profile. Follow this exactly:\n{style_context}\n\n"
+        base += f"风格摘要：{compact_style_summary(style_context)}\n"
     if asset_context:
-        base += f"Referenced asset anchors:\n{asset_context}\n\n"
-    return base + prompt
+        base += f"参考锚点：{asset_context}\n"
+    full_prompt = base + prompt
+    if len(full_prompt) <= 800 or not asset_names:
+        return full_prompt
+    compact_base = (
+        "竖屏9:16图生视频控制帧；电影写实风格；无文字、无品牌、无UI、无拼贴。"
+        "保持人物身份、服装、道具、地点、运动方向和物理状态连续。\n"
+    )
+    if style_context:
+        compact_base += f"风格摘要：{compact_style_summary(style_context)}\n"
+    compact_base += f"参考锚点：{asset_names}（完整视觉锚点见 stages/02_assets.json）\n"
+    return compact_base + prompt
+
+
+def compact_style_summary(style_context: str) -> str:
+    return "电影风格；写实自然表演；克制统一色彩；清晰空间连续性；避免短剧夸张、漫画格、网感字幕。"
+
+
+def asset_prompt_line(asset: dict[str, Any]) -> str:
+    name = str(asset.get("name", "")).strip()
+    asset_type = str(asset.get("type", "asset")).strip()
+    description = clip_text(str(asset.get("description", "")).strip(), 36)
+    consistency = clip_text(str(asset.get("consistency_notes", "")).strip(), 52)
+    return f"{asset_type} {name}: {description}；{consistency}"
+
+
+def clip_text(value: str, limit: int) -> str:
+    value = " ".join(value.split())
+    if len(value) <= limit:
+        return value
+    return value[: max(0, limit - 1)].rstrip() + "…"
 
 
 def video_prompt_with_style(prompt: str, style_context: str = "") -> str:
     if not style_context:
         return prompt
-    return f"Selected Style Profile. Follow this exactly:\n{style_context}\n\nVideo prompt:\n{prompt}"
+    return f"已选风格档案，必须严格遵守：\n{style_context}\n\n视频提示词：\n{prompt}"
 
 
 def style_options() -> list[dict[str, Any]]:
@@ -510,45 +695,45 @@ def style_options() -> list[dict[str, Any]]:
             "id": "film",
             "label": "电影风格",
             "description": "更接近短片/电影语言，强调镜头调度、光影、空间关系和情绪递进。",
-            "visual_rules": ["cinematic lighting", "natural performance", "controlled color palette", "clear spatial continuity"],
-            "storyboard_rules": ["use establishing shots when needed", "prefer motivated camera movement", "let emotion build through shot order"],
-            "prompt_rules": ["include lens/camera position/movement only when useful", "avoid overexplaining UI-like instructions"],
+            "visual_rules": ["电影感光影", "自然真实的表演", "克制统一的色彩", "清晰的空间连续性"],
+            "storyboard_rules": ["需要时使用环境建立镜头", "优先使用有动机的镜头运动", "通过镜头顺序递进情绪"],
+            "prompt_rules": ["只在必要时写明镜头位置、焦段和运动", "避免过度解释成 UI 指令或说明书"],
             "avoid": ["短剧式夸张表演", "漫画格子感", "过度网感字幕化"],
         },
         {
             "id": "short_drama",
             "label": "短剧风格",
             "description": "节奏更快，人物表情和冲突更直接，适合移动端竖屏爽感叙事。",
-            "visual_rules": ["vertical mobile framing", "clear faces", "strong emotional beats", "high readability"],
-            "storyboard_rules": ["start scenes quickly", "make conflict readable in the first seconds", "use reaction shots often"],
-            "prompt_rules": ["make character emotion explicit", "keep action and consequence visually obvious"],
+            "visual_rules": ["移动端竖屏构图", "人物脸部清晰", "情绪点强", "画面信息易读"],
+            "storyboard_rules": ["场景进入要快", "前几秒就让冲突可读", "多使用反应镜头"],
+            "prompt_rules": ["明确人物情绪", "让动作和后果在画面上一眼可见"],
             "avoid": ["慢热电影铺垫过长", "含混的情绪表达", "过暗或难读的画面"],
         },
         {
             "id": "comic_drama",
             "label": "漫剧风格",
             "description": "漫画/轻动画式表达，强调清晰轮廓、戏剧姿态、夸张反应和分镜感。",
-            "visual_rules": ["stylized character shapes", "clean silhouettes", "expressive poses", "panel-like composition"],
-            "storyboard_rules": ["use pose-to-pose clarity", "make reactions graphic and readable", "favor iconic action states"],
-            "prompt_rules": ["describe pose, expression, and visual emphasis clearly", "keep continuity of costume and character design"],
+            "visual_rules": ["角色造型更风格化", "轮廓清晰", "姿态有表现力", "构图有漫画分格感"],
+            "storyboard_rules": ["强调关键姿态之间的清晰转换", "让反应图形化且易读", "优先设计标志性动作状态"],
+            "prompt_rules": ["清楚描述姿态、表情和视觉强调点", "保持服装和角色设计连续"],
             "avoid": ["写实电影灰暗质感", "过多细碎真实运动模糊", "角色设计漂移"],
         },
         {
             "id": "anime",
             "label": "动画番剧风格",
             "description": "接近动画番剧的镜头和角色表现，兼顾情绪、动作关键姿势和连续性。",
-            "visual_rules": ["anime-inspired lighting", "clean character consistency", "expressive eyes and posture", "dynamic but readable motion"],
-            "storyboard_rules": ["use clear key poses", "emphasize emotional timing", "support action with cutaways when physics is hard"],
-            "prompt_rules": ["state character design and outfit consistency", "describe key pose and camera angle"],
+            "visual_rules": ["动画感光影", "角色一致性清晰", "眼神和姿态有表现力", "动态强但动作可读"],
+            "storyboard_rules": ["使用清楚的关键姿势", "强调情绪节拍", "物理动作困难时用切镜辅助"],
+            "prompt_rules": ["明确角色设计和服装一致性", "描述关键姿势和镜头角度"],
             "avoid": ["真人短剧质感", "过度照片写实", "随机换装"],
         },
         {
             "id": "documentary",
             "label": "纪实风格",
             "description": "自然、克制、像真实观察到的片段，减少表演感和夸张镜头。",
-            "visual_rules": ["natural light", "observational camera", "realistic blocking", "restrained color"],
-            "storyboard_rules": ["favor believable real-time actions", "avoid melodramatic staging", "let environment tell context"],
-            "prompt_rules": ["keep props, movement, and body mechanics grounded"],
+            "visual_rules": ["自然光", "观察式镜头", "真实可信的调度", "克制的色彩"],
+            "storyboard_rules": ["优先使用可信的实时动作", "避免过度戏剧化调度", "让环境承担叙事信息"],
+            "prompt_rules": ["道具、运动和身体力学都要落地可信"],
             "avoid": ["过度戏剧化", "漫画夸张", "不可信的物理动作"],
         },
     ]
@@ -562,23 +747,23 @@ def format_style_markdown(profile: dict[str, Any]) -> str:
             f"- id: {profile.get('id', 'custom')}",
             f"- description: {profile.get('description', '')}",
             "",
-            "## Visual Rules",
+            "## 视觉规则",
             "",
             bullet_lines(profile.get("visual_rules")),
             "",
-            "## Storyboard Rules",
+            "## 分镜规则",
             "",
             bullet_lines(profile.get("storyboard_rules")),
             "",
-            "## Prompt Rules",
+            "## Prompt 规则",
             "",
             bullet_lines(profile.get("prompt_rules")),
             "",
-            "## Avoid",
+            "## 避免",
             "",
             bullet_lines(profile.get("avoid")),
             "",
-            "## User Note",
+            "## 用户补充",
             "",
             str(profile.get("user_note", "")).strip(),
             "",

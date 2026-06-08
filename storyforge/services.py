@@ -85,7 +85,7 @@ class ArkClient:
             "prompt": prompt_en,
             "size": "1440x2560",
             "response_format": "url",
-            "watermark": True,
+            "watermark": False,
         }
         if refs:
             body["image"] = refs[:14]

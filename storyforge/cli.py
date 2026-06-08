@@ -30,12 +30,14 @@ def main(argv: list[str] | None = None) -> int:
     pipe.add_argument("--style", help="Production style id, for example film, short_drama, comic_drama, anime, documentary")
     pipe.add_argument("--style-note", default="", help="Optional custom style note")
     pipe.add_argument("--with-media", action="store_true", help="Import existing Codex keyframes and run Ark video generation")
+    pipe.add_argument("--auto-continue", action="store_true", help="Run every stage without stopping at user review gates")
 
     doc_pipe = sub.add_parser("pipeline-from-document")
     doc_pipe.add_argument("--document", required=True, help="Path to txt, md, docx, or pdf script document")
     doc_pipe.add_argument("--style", help="Production style id, for example film, short_drama, comic_drama, anime, documentary")
     doc_pipe.add_argument("--style-note", default="", help="Optional custom style note")
     doc_pipe.add_argument("--with-media", action="store_true", help="Import existing Codex keyframes and run Ark video generation")
+    doc_pipe.add_argument("--auto-continue", action="store_true", help="Run every stage without stopping at user review gates")
 
     args = parser.parse_args(argv)
     registry = default_registry()
@@ -82,11 +84,16 @@ def main(argv: list[str] | None = None) -> int:
                 current_input = style_input
             else:
                 current_input = {}
+            if args.auto_continue:
+                current_input = {**current_input, "auto_continue_after_review": True}
             result = runner.run(skill_id, current_input)
             print(json.dumps({"skill": skill_id, "ok": result.ok, "message": result.message, **result.data}, ensure_ascii=False))
             if not result.ok:
                 return 1
             if result.data.get("awaiting_user_selection"):
+                return 0
+            if should_pause_for_user_review(result.data, args.auto_continue):
+                print(json.dumps(review_pause_payload(project_id, skill_id, sequence), ensure_ascii=False))
                 return 0
         return 0
 
@@ -104,11 +111,16 @@ def main(argv: list[str] | None = None) -> int:
                 current_input = style_input
             else:
                 current_input = {}
+            if args.auto_continue:
+                current_input = {**current_input, "auto_continue_after_review": True}
             result = runner.run(skill_id, current_input)
             print(json.dumps({"skill": skill_id, "ok": result.ok, "message": result.message, **result.data}, ensure_ascii=False))
             if not result.ok:
                 return 1
             if result.data.get("awaiting_user_selection"):
+                return 0
+            if should_pause_for_user_review(result.data, args.auto_continue):
+                print(json.dumps(review_pause_payload(project_id, skill_id, sequence), ensure_ascii=False))
                 return 0
         return 0
 
@@ -131,6 +143,29 @@ def existing_project_ids(projects_root: Path) -> set[str]:
     if not projects_root.exists():
         return set()
     return {path.name for path in projects_root.iterdir() if path.is_dir()}
+
+
+def should_pause_for_user_review(result_data: dict[str, object], auto_continue: bool) -> bool:
+    return bool(result_data.get("awaiting_user_review")) and not auto_continue
+
+
+def review_pause_payload(project_id: str, current_skill: str, sequence: list[str]) -> dict[str, object]:
+    try:
+        current_index = sequence.index(current_skill)
+    except ValueError:
+        current_index = -1
+    next_skill = sequence[current_index + 1] if 0 <= current_index + 1 < len(sequence) else None
+    payload: dict[str, object] = {
+        "paused": True,
+        "reason": "awaiting_user_review",
+        "project_id": project_id,
+        "current_skill": current_skill,
+        "message": "阶段产物已生成并完成 agent 审阅。请先查看 review/user_<skill>.md，确认后再运行下一阶段。",
+    }
+    if next_skill:
+        payload["next_skill"] = next_skill
+        payload["next_command"] = f"python -m storyforge.cli --project {project_id} run {next_skill}"
+    return payload
 
 
 if __name__ == "__main__":
