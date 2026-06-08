@@ -93,15 +93,17 @@ def review_stage_output(ctx: SkillContext, skill_id: str, description: str, resu
 
     agent_review_path = ctx.workspace.review_dir / f"agent_{skill_id}.md"
     user_review_path = ctx.workspace.review_dir / f"user_{skill_id}.md"
+    knowledge_block = review_knowledge_block(ctx)
     try:
         review = ctx.llm.chat_json(
-            "你是 Storyforge 的 stage_review_agent。你要在用户看到材料之前，先审阅一个已经完成的生产阶段。输出严格 JSON，字段包括 score(1-10), verdict(approve|revise|block), strengths, risks, continuity_checks, concrete_revision_requests, user_review_focus, knowledge_capture_candidates。判断要直接、面向制片执行，重点检查故事保真、连续性、物理逻辑、prompt 可用性、字段完整性、下一阶段是否有足够信息。所有字段值必须使用简体中文。",
+            "你是 Storyforge 的 stage_review_agent。你要在用户看到材料之前，先审阅一个已经完成的生产阶段。输出严格 JSON，字段包括 score(1-10), verdict(approve|revise|block), strengths, risks, continuity_checks, concrete_revision_requests, user_review_focus, knowledge_capture_candidates。判断要直接、面向制片执行，重点检查故事保真、连续性、物理逻辑、prompt 可用性、字段完整性、下一阶段是否有足够信息。下面提供的【已沉淀制作知识卡】代表经过实测验证的制作决策，优先级高于通用常识：如果产物遵循了这些知识（例如 first-frame-only 首帧驱动、背影/过肩锁方向、不依赖中文招牌文字、单条视频≥5秒），不要把它判成风险或要求改回通用做法；只在产物违背知识卡、或存在知识卡未覆盖的真实问题时才提风险与修改。所有字段值必须使用简体中文。",
             (
                 f"输出语言规则：{CHINESE_OUTPUT_RULE}\n"
                 f"Skill id: {skill_id}\n"
                 f"Skill description: {description}\n"
                 f"Result message: {result.message}\n"
                 f"Artifact ref: {artifact_ref}\n\n"
+                f"已沉淀制作知识卡（权威，优先于通用常识）：\n{knowledge_block}\n\n"
                 f"Artifact content:\n{review_artifact_text}"
             ),
             temperature=0.1,
@@ -130,6 +132,17 @@ def review_stage_output(ctx: SkillContext, skill_id: str, description: str, resu
             "agent_verdict": "review_failed",
             "agent_review_error": str(exc),
         }
+
+
+def review_knowledge_block(ctx: SkillContext) -> str:
+    """检索项目级 + 全局知识卡，作为审阅 agent 的权威制作知识上下文。"""
+    try:
+        cards = ctx.workspace.retrieve_knowledge_cards(limit=8)
+    except Exception:
+        cards = []
+    if not cards:
+        return "（暂无知识卡）"
+    return "\n\n".join(f"[{card['source']}]\n{card['text'][:3000]}" for card in cards)
 
 
 def read_artifact_text(workspace: ProjectWorkspace, artifact_ref: str) -> str:

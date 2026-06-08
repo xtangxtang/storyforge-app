@@ -44,13 +44,25 @@ class LLMClient:
         if json_mode:
             body["response_format"] = {"type": "json_object"}
         http = require_requests()
-        response = http.post(
-            f"{self.config.llm_base_url}/chat/completions",
-            headers={"Authorization": f"Bearer {self.config.llm_api_key}", "Content-Type": "application/json"},
-            data=json.dumps(body),
-            proxies=self.config.proxies,
-            timeout=300,
-        )
+        last_exc: Exception | None = None
+        response = None
+        for attempt in range(1, 3):  # 大段 JSON 生成偶发读超时/断连，重试一次
+            try:
+                response = http.post(
+                    f"{self.config.llm_base_url}/chat/completions",
+                    headers={"Authorization": f"Bearer {self.config.llm_api_key}", "Content-Type": "application/json"},
+                    data=json.dumps(body),
+                    proxies=self.config.proxies,
+                    timeout=600,
+                )
+                break
+            except http.exceptions.RequestException as exc:
+                last_exc = exc
+                if attempt >= 2:
+                    raise RuntimeError(f"{tag} request failed after retries: {exc}") from exc
+                time.sleep(3 * attempt)
+        if response is None:
+            raise RuntimeError(f"{tag} request failed: {last_exc}")
         if response.status_code != 200:
             raise RuntimeError(f"{tag} failed HTTP {response.status_code}: {response.text[:500]}")
         data = response.json()
@@ -105,7 +117,7 @@ class ArkClient:
         prompt_en = self.llm.translate_visual_prompt(prompt)
         first_frame_ref = media_ref(first_frame_url)
         content: list[dict[str, Any]] = [
-            {"type": "text", "text": f"{prompt_en} --ratio 9:16 --resolution 720p --duration {max(3, min(10, duration))}"},
+            {"type": "text", "text": f"{prompt_en} --ratio 9:16 --resolution 720p --duration {max(5, min(10, duration))}"},
             {"type": "image_url", "image_url": {"url": first_frame_ref}, "role": "first_frame"},
         ]
         for url in (reference_video_urls or [])[:3]:
@@ -143,13 +155,21 @@ class ArkClient:
                 raise RuntimeError(f"Ark video failed: {data.get('error')}")
         raise TimeoutError(f"Ark video task timeout: {task_id}")
 
-    def download(self, url: str, path: Path) -> Path:
+    def download(self, url: str, path: Path, tries: int = 4) -> Path:
         path.parent.mkdir(parents=True, exist_ok=True)
         http = require_requests()
-        response = http.get(url, proxies=self.config.proxies, timeout=300)
-        response.raise_for_status()
-        path.write_bytes(response.content)
-        return path
+        last_exc: Exception | None = None
+        for attempt in range(1, tries + 1):
+            try:
+                response = http.get(url, proxies=self.config.proxies, timeout=300)
+                response.raise_for_status()
+                path.write_bytes(response.content)
+                return path
+            except Exception as exc:  # noqa: BLE001 - Ark 下载偶发 SSL/EOF/超时，退避重试
+                last_exc = exc
+                if attempt < tries:
+                    time.sleep(2 * attempt)
+        raise RuntimeError(f"download failed after {tries} tries: {url} -> {last_exc}")
 
 
 def parse_json_object(text: str) -> dict[str, Any]:

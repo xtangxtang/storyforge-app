@@ -7,6 +7,9 @@ from typing import Any
 from .document import extract_document_text
 from .skills import SkillContext, SkillRegistry, SkillResult, write_review_markdown
 
+# 对白/动作镜头恒加的整洁画面约束，避免 Seedance 烧录字幕、台词文字或水印 logo。
+CLEAN_FRAME_RULE = "。画面整洁干净，不出现任何字幕、对白文字、标题字、台词、水印或 logo。"
+
 
 class DocumentIngestSkill:
     id = "document_ingest"
@@ -172,7 +175,7 @@ class StoryboardPlanSkill:
         if not script.get("scenes"):
             return SkillResult(False, "stages/01_script.json 中没有找到 scenes", {})
         data = ctx.llm.chat_json(
-            "你是 Storyforge 的 storyboard_plan。创建严格 JSON：{storyboards:[...]}。每个分镜节拍包含 id, scene_num, shot_num, location, duration(3-8秒), characters, props, description, first_frame_prompt, video_prompt, continuity。必须保留原故事。复杂物理动作要拆成更小节拍或切镜。每个节拍和 prompt 都必须遵守 workspace context 中的 Style Profile。所有字段值和说明必须使用简体中文。",
+            "你是 Storyforge 的 storyboard_plan。创建严格 JSON：{storyboards:[...]}。每个分镜节拍包含 id, scene_num, shot_num, location, duration(5-8秒，视频单条下限5秒), characters, props, description, first_frame_prompt, video_prompt, continuity。必须保留原故事。复杂物理动作要拆成更小节拍或切镜。方向/进入/相撞类镜头的 first_frame_prompt 用背影或过肩、把运动目的地放在画面纵深来锁方向；对话镜用过肩、避免双正脸。每个节拍和 prompt 都必须遵守 workspace context 中的 Style Profile。所有字段值和说明必须使用简体中文。",
             f"Workspace context:\n{ctx.workspace.context_pack()}\n\nScript JSON:\n{json.dumps(script, ensure_ascii=False)}",
             temperature=float(input_data.get("temperature", 0.25)),
             tag=self.id,
@@ -196,7 +199,7 @@ class AtomicShotPlanSkill:
         if not storyboards:
             return SkillResult(False, "没有找到 storyboards", {})
         data = ctx.llm.chat_json(
-            "你是 Storyforge 的 atomic_shot_plan。输出严格 JSON：{atomic_shots:[...]}。每个原子镜头包含 id, storyboard_id, duration, purpose, first_frame_prompt, last_frame_prompt, video_prompt, continuity_state_start, continuity_state_end, reference_asset_names。每个镜头只承载一个动作意图。碰撞等困难物理动作优先使用切镜。相邻镜头必须共享连续状态。所有图片/视频 prompt 都必须遵守 workspace context 中的 Style Profile。所有字段值和说明必须使用简体中文。",
+            "你是 Storyforge 的 atomic_shot_plan。输出严格 JSON：{atomic_shots:[...]}。每个原子镜头包含 id, storyboard_id, duration, purpose, first_frame_prompt, last_frame_prompt, video_prompt, continuity_state_start, continuity_state_end, reference_asset_names。每个镜头只承载一个动作意图。duration 按动作复杂度与情绪张力差异化：关键动态镜（碰撞、奔跑、得分、急刹）取 6-8 秒，静态对话/反应镜取 5 秒；单条下限 5 秒，不要低于 5、也不要一律 5 秒。first_frame_prompt 用相机相对语言锁方向：动作/方向镜用背影或过肩、目的地放画面纵深；对话与情绪镜用过肩或侧脸45°、可露出部分面部传递表情，只避免贴镜头的双大正脸，不要一律纯背影丢失情绪。first_frame_prompt 同时补充稳定身份锚点（如校服蓝白拼色、校徽位置、发型轮廓、体型特征），降低纯背影/过肩下人物认错。默认只靠首帧驱动（first-frame-only），last_frame_prompt 只在结尾必须精确发生某接触/到达且首尾构图接近时才写，否则留空。不要依赖中文招牌/黑板文字逐帧稳定。碰撞等困难物理动作优先使用切镜。相邻镜头必须共享连续状态。所有图片/视频 prompt 都必须遵守 workspace context 中的 Style Profile。所有字段值和说明必须使用简体中文。",
             f"Workspace context:\n{ctx.workspace.context_pack()}\n\nStoryboards:\n{json.dumps(storyboards, ensure_ascii=False)}",
             temperature=0.2,
             tag=self.id,
@@ -225,20 +228,24 @@ class KeyframePlanSkill:
             atom_id = str(atom.get("id"))
             named_assets = [asset_context[n] for n in atom.get("reference_asset_names", []) if n in asset_context]
             first_path = Path("keyframes") / f"{safe_name(atom_id)}_first.png"
-            last_path = Path("keyframes") / f"{safe_name(atom_id)}_last.png"
-            tasks.append(
-                {
-                    "atomic_shot_id": atom_id,
-                    "storyboard_id": atom.get("storyboard_id"),
-                    "duration": atom.get("duration", 5),
-                    "video_prompt": atom.get("video_prompt", ""),
-                    "first_frame_prompt": frame_prompt(str(atom.get("first_frame_prompt", "")), named_assets, style_context),
-                    "last_frame_prompt": frame_prompt(str(atom.get("last_frame_prompt", "")), named_assets, style_context),
-                    "first_frame_local_path": first_path.as_posix(),
-                    "last_frame_local_path": last_path.as_posix(),
-                    "status": "needs_codex_image_generation",
-                }
-            )
+            raw_last = str(atom.get("last_frame_prompt", "")).strip()
+            task = {
+                "atomic_shot_id": atom_id,
+                "storyboard_id": atom.get("storyboard_id"),
+                "duration": atom.get("duration", 5),
+                "video_prompt": atom.get("video_prompt", ""),
+                "first_frame_prompt": frame_prompt(str(atom.get("first_frame_prompt", "")), named_assets, style_context),
+                "first_frame_local_path": first_path.as_posix(),
+                "frame_mode": "first_last" if raw_last else "first_frame_only",
+                "reference_asset_names": atom.get("reference_asset_names", []),
+                "status": "needs_codex_image_generation",
+            }
+            # 仅当原子镜确有尾帧指令（困难接触/到达镜）才规划尾帧任务，避免生成无意义的纯模板尾帧。
+            if raw_last:
+                last_path = Path("keyframes") / f"{safe_name(atom_id)}_last.png"
+                task["last_frame_prompt"] = frame_prompt(raw_last, named_assets, style_context)
+                task["last_frame_local_path"] = last_path.as_posix()
+            tasks.append(task)
         out = {
             "source": self.id,
             "image_provider": "codex",
@@ -246,7 +253,8 @@ class KeyframePlanSkill:
                 "style_reference": "wiki/style.md",
                 "asset_reference": "stages/02_assets.json",
                 "prompt_budget_chars": 800,
-                "rule": "每条首尾帧 prompt 只保留镜头画面、核心动作、物理/方向/光影约束；完整风格和资产锚点由全局引用提供。",
+                "frame_policy": "默认 first-frame-only 锁方向；仅困难接触/到达镜才规划 last_frame 任务。",
+                "rule": "每条首帧 prompt 只保留镜头画面、核心动作、物理/方向/光影约束；完整风格和资产锚点由全局引用提供。",
             },
             "keyframe_tasks": tasks,
         }
@@ -277,14 +285,11 @@ class KeyframeImportSkill:
             explicit = explicit_images.get(atom_id, {}) if isinstance(explicit_images, dict) else {}
             first_path = resolve_workspace_path(ctx, explicit.get("first_frame_local_path") or row.get("first_frame_local_path"))
             last_path = resolve_workspace_path(ctx, explicit.get("last_frame_local_path") or row.get("last_frame_local_path"))
-            row_missing = []
+            # first-frame-only 锁方向：首帧必需，尾帧可选（仅困难接触/到达镜头才需要）。
             if not first_path or not first_path.exists():
-                row_missing.append("first_frame_local_path")
-            if not last_path or not last_path.exists():
-                row_missing.append("last_frame_local_path")
-            if row_missing:
-                missing.append({"atomic_shot_id": atom_id, "missing": row_missing, "expected": {"first": str(first_path), "last": str(last_path)}})
+                missing.append({"atomic_shot_id": atom_id, "missing": ["first_frame_local_path"], "expected": {"first": str(first_path)}})
                 continue
+            has_last = bool(last_path and last_path.exists())
             imported.append(
                 {
                     "atomic_shot_id": atom_id,
@@ -292,7 +297,8 @@ class KeyframeImportSkill:
                     "duration": row.get("duration", 5),
                     "video_prompt": row.get("video_prompt", ""),
                     "first_frame_local_path": str(first_path),
-                    "last_frame_local_path": str(last_path),
+                    "last_frame_local_path": str(last_path) if has_last else "",
+                    "frame_mode": "first_last" if has_last else "first_frame_only",
                     "image_provider": "codex",
                     "status": "imported",
                 }
@@ -308,16 +314,18 @@ class KeyframeImportSkill:
 
 class KeyframeGenerateArkSkill:
     id = "keyframe_generate_ark"
-    description = "备用路径：通过 Ark 图片生成首帧/尾帧控制图。"
+    description = "备用路径：通过 Ark 生成每镜背影/过肩首帧控制图（first-frame-only，锁方向不 morph，可断点续跑）。"
 
     def run(self, ctx: SkillContext, input_data: dict[str, Any]) -> SkillResult:
         plan = ctx.workspace.read_stage("05_keyframe_plan.json")
         tasks = list(plan.get("keyframe_tasks") or [])
+        atoms = list(ctx.workspace.read_stage("04_atomic_shots.json").get("atomic_shots") or [])
         if not tasks:
-            atoms = list(ctx.workspace.read_stage("04_atomic_shots.json").get("atomic_shots") or [])
             tasks = keyframe_tasks_from_atoms(ctx, atoms)
         if not tasks:
             return SkillResult(False, "没有找到关键帧任务，请先运行 keyframe_plan", {})
+        # 计划任务可能不带 reference_asset_names，从原子镜补一张映射表。
+        ref_names_by_atom = {str(a.get("id")): list(a.get("reference_asset_names") or []) for a in atoms}
 
         start_index = max(0, int(input_data.get("start_index") or 0))
         limit = max(0, int(input_data.get("limit") or input_data.get("max_items") or 0))
@@ -333,8 +341,12 @@ class KeyframeGenerateArkSkill:
             for item in ctx.workspace.read_stage("05_keyframes.json").get("keyframes", [])
             if item.get("atomic_shot_id")
         }
-        asset_context = load_asset_context(ctx)
         style_context = load_style_context(ctx)
+        # canon 注入：先为本批次涉及的地点/角色生成统一锚点（地点=canon基准空镜，角色=定妆图），
+        # 缓存进 02_assets.json；该地点每个首帧都引用同一张基准图 -> 跨镜头结构统一。
+        # 按 selected_tasks 计算，小批量测试只生成用到的锚点；锚点缓存后续批次自动复用。
+        needed = {n for t in selected_tasks for n in (t.get("reference_asset_names") or ref_names_by_atom.get(str(t.get("atomic_shot_id")), []))}
+        anchors = ensure_asset_anchors(ctx, style_context, only_names=needed)
         generated = 0
         skipped = 0
         failed = 0
@@ -342,16 +354,16 @@ class KeyframeGenerateArkSkill:
 
         for task in selected_tasks:
             atom_id = str(task.get("atomic_shot_id"))
-            named_assets = [asset_context[n] for n in task.get("reference_asset_names", []) if n in asset_context]
-            refs = [
-                *continuity_reference_urls(task_order, existing, atom_id),
-                *[str(asset["reference_image_url"]) for asset in named_assets if asset.get("reference_image_url")],
-            ]
+            names = task.get("reference_asset_names") or ref_names_by_atom.get(atom_id, [])
+            # 首帧参考图 = 该镜地点的 canon 基准图 + 在场角色定妆图（只喂图片生成，不喂视频）。
+            refs = [anchors[n] for n in names if anchors.get(n)]
+            if not refs:
+                refs = continuity_reference_urls(task_order, existing, atom_id)
             first_path = resolve_workspace_path(ctx, task.get("first_frame_local_path")) or ctx.workspace.keyframes_dir / f"{safe_name(atom_id)}_first.png"
-            last_path = resolve_workspace_path(ctx, task.get("last_frame_local_path")) or ctx.workspace.keyframes_dir / f"{safe_name(atom_id)}_last.png"
             current = dict(existing.get(atom_id) or {})
-            can_skip = first_path.exists() and last_path.exists() and not overwrite
-            if can_skip:
+            # first-frame-only：只生成背影/过肩首帧驱动自然前进运动，不生成尾帧（避免首尾 morph）。
+            # 跳过判定只看首帧是否已存在。
+            if first_path.exists() and not overwrite:
                 skipped += 1
                 existing[atom_id] = {
                     **current,
@@ -360,16 +372,14 @@ class KeyframeGenerateArkSkill:
                     "duration": task.get("duration", 5),
                     "video_prompt": task.get("video_prompt", ""),
                     "first_frame_local_path": str(first_path),
-                    "last_frame_local_path": str(last_path),
                     "image_provider": "ark",
+                    "frame_mode": "first_frame_only",
                     "state": "ready",
                 }
                 continue
             try:
-                first_url = ctx.ark.generate_image(ark_image_prompt(str(task.get("first_frame_prompt", "")), atom_id), refs=refs)
+                first_url = ctx.ark.generate_image(ark_image_prompt(str(task.get("first_frame_prompt", ""))), refs=refs)
                 ctx.ark.download(first_url, first_path)
-                last_url = ctx.ark.generate_image(ark_image_prompt(str(task.get("last_frame_prompt", "")), atom_id), refs=[first_url, *refs])
-                ctx.ark.download(last_url, last_path)
                 generated += 1
                 existing[atom_id] = {
                     "atomic_shot_id": atom_id,
@@ -378,9 +388,8 @@ class KeyframeGenerateArkSkill:
                     "video_prompt": task.get("video_prompt", ""),
                     "first_frame_url": first_url,
                     "first_frame_local_path": str(first_path),
-                    "last_frame_url": last_url,
-                    "last_frame_local_path": str(last_path),
                     "image_provider": "ark",
+                    "frame_mode": "first_frame_only",
                     "state": "ready",
                 }
             except Exception as exc:
@@ -392,8 +401,8 @@ class KeyframeGenerateArkSkill:
                     "duration": task.get("duration", 5),
                     "video_prompt": task.get("video_prompt", ""),
                     "first_frame_local_path": str(first_path),
-                    "last_frame_local_path": str(last_path),
                     "image_provider": "ark",
+                    "frame_mode": "first_frame_only",
                     "state": "failed",
                     "error": str(exc),
                 }
@@ -402,7 +411,8 @@ class KeyframeGenerateArkSkill:
         out = {
             "source": self.id,
             "image_provider": "ark",
-            "mode": "text_to_image",
+            "mode": "first_frame_only",
+            "anchors": anchors,
             "keyframes": keyframes,
             "success": sum(item.get("state") == "ready" for item in keyframes),
             "failed": sum(item.get("state") == "failed" for item in keyframes),
@@ -413,7 +423,7 @@ class KeyframeGenerateArkSkill:
         ok = generated > 0 or skipped > 0
         return SkillResult(
             ok,
-            "关键帧生成流程已完成" if ok else "关键帧生成失败",
+            "关键帧生成流程已完成（first-frame-only）" if ok else "关键帧生成失败",
             {"file": "stages/05_keyframes.json", "generated": generated, "skipped": skipped, "failed": failed, "success": out["success"], "total_planned": len(tasks)},
         )
 
@@ -426,21 +436,74 @@ def keyframe_tasks_from_atoms(ctx: SkillContext, atoms: list[dict[str, Any]]) ->
         atom_id = str(atom.get("id"))
         named_assets = [asset_context[n] for n in atom.get("reference_asset_names", []) if n in asset_context]
         first_path = Path("keyframes") / f"{safe_name(atom_id)}_first.png"
-        last_path = Path("keyframes") / f"{safe_name(atom_id)}_last.png"
-        tasks.append(
-            {
-                "atomic_shot_id": atom_id,
-                "storyboard_id": atom.get("storyboard_id"),
-                "duration": atom.get("duration", 5),
-                "video_prompt": atom.get("video_prompt", ""),
-                "first_frame_prompt": frame_prompt(str(atom.get("first_frame_prompt", "")), named_assets, style_context),
-                "last_frame_prompt": frame_prompt(str(atom.get("last_frame_prompt", "")), named_assets, style_context),
-                "first_frame_local_path": first_path.as_posix(),
-                "last_frame_local_path": last_path.as_posix(),
-                "reference_asset_names": atom.get("reference_asset_names", []),
-            }
-        )
+        raw_last = str(atom.get("last_frame_prompt", "")).strip()
+        task = {
+            "atomic_shot_id": atom_id,
+            "storyboard_id": atom.get("storyboard_id"),
+            "duration": atom.get("duration", 5),
+            "video_prompt": atom.get("video_prompt", ""),
+            "first_frame_prompt": frame_prompt(str(atom.get("first_frame_prompt", "")), named_assets, style_context),
+            "first_frame_local_path": first_path.as_posix(),
+            "frame_mode": "first_last" if raw_last else "first_frame_only",
+            "reference_asset_names": atom.get("reference_asset_names", []),
+        }
+        if raw_last:
+            last_path = Path("keyframes") / f"{safe_name(atom_id)}_last.png"
+            task["last_frame_prompt"] = frame_prompt(raw_last, named_assets, style_context)
+            task["last_frame_local_path"] = last_path.as_posix()
+        tasks.append(task)
     return tasks
+
+
+def ensure_asset_anchors(ctx: SkillContext, style_context: str = "", only_names: set[str] | None = None) -> dict[str, str]:
+    """为每个 asset 生成一张稳定锚点图并缓存进 stages/02_assets.json：
+    地点->canon 基准空镜（统一结构、人群背对镜头、无主要人物特写）；角色->定妆图；道具->干净单体图。
+    已有 reference_image_url 的跳过，便于断点续跑复用。返回 name -> url。"""
+    stage = ctx.workspace.read_stage("02_assets.json")
+    assets = list(stage.get("assets") or [])
+    anchors: dict[str, str] = {}
+    changed = False
+    for asset in assets:
+        name = str(asset.get("name") or "").strip()
+        if not name:
+            continue
+        if only_names is not None and name not in only_names:
+            continue
+        if asset.get("reference_image_url"):
+            anchors[name] = str(asset["reference_image_url"])
+            continue
+        url = ctx.ark.generate_image(anchor_prompt(asset, style_context))
+        path = ctx.ark.download(url, ctx.workspace.assets_dir / f"{safe_name(name)}.png")
+        asset["reference_image_url"] = url
+        asset["reference_image_local_path"] = str(path)
+        anchors[name] = url
+        changed = True
+    if changed:
+        ctx.workspace.write_stage("02_assets.json", {**stage, "assets": assets})
+    return anchors
+
+
+def anchor_prompt(asset: dict[str, Any], style_context: str = "") -> str:
+    asset_type = str(asset.get("type", "asset")).strip()
+    name = str(asset.get("name", "")).strip()
+    visual = str(asset.get("visual_anchor_prompt") or asset.get("description") or "").strip()
+    style_line = f"风格摘要：{compact_style_summary(style_context)}\n" if style_context else ""
+    if asset_type == "location":
+        framing = (
+            f"{name} 的统一基准空镜（canon base），电影写实风格，竖屏9:16；"
+            "完整交代地点结构与陈设，统一服装的人群背对镜头朝场景纵深方向，"
+            "无主要人物特写、不依赖文字招牌、无海报无拼贴。"
+        )
+    elif asset_type == "character":
+        framing = (
+            f"{name} 的角色定妆参考图（character sheet），单人、全身、正面、中性自然站姿、"
+            "纯净浅灰摄影棚背景、均匀柔光，写实电影质感，无文字、无海报、无拼贴。"
+        )
+    else:
+        framing = (
+            f"{name} 的道具参考图，干净背景单体呈现，写实质感，无文字、无海报、无拼贴。"
+        )
+    return f"{style_line}{framing}\n{visual}"
 
 
 def normalize_id_filter(value: Any) -> set[str]:
@@ -454,49 +517,31 @@ def normalize_id_filter(value: Any) -> set[str]:
 
 
 def continuity_reference_urls(task_order: list[str], existing: dict[str, dict[str, Any]], atom_id: str) -> list[str]:
+    """取最近一个已生成成功镜头的首帧作参考图，给后一镜首帧做跨镜连续性。
+    只喂给图片生成（首帧→首帧有助一致性），绝不喂给视频生成（参考图会带歪视频方向）。"""
     if atom_id not in task_order:
         return []
     index = task_order.index(atom_id)
-    refs: list[str] = []
     for previous_id in reversed(task_order[:index]):
         previous = existing.get(previous_id) or {}
         if previous.get("state") != "ready":
             continue
-        for key in ["last_frame_url", "first_frame_url"]:
-            url = str(previous.get(key) or "").strip()
-            if url and url not in refs:
-                refs.append(url)
-        if refs:
-            break
-    return refs[:2]
+        url = str(previous.get("first_frame_url") or "").strip()
+        if url:
+            return [url]
+    return []
 
 
-def ark_image_prompt(prompt: str, atom_id: str) -> str:
+def ark_image_prompt(prompt: str) -> str:
+    """Ark 文生图的通用硬约束（与具体项目无关）。
+    项目专属的方向/连续性（哪座门、谁穿什么、往哪走）应写进该原子镜头的
+    first_frame_prompt（数据层），不要写死在框架代码里。"""
     constraints = [
         "Ark text-to-image hard constraints: vertical 9:16 cinematic realistic control frame.",
-        "Do not render readable Chinese or English text anywhere; all school gate signs, plaques, labels, uniforms, papers, and posters must be blank, hidden by shadow, cropped out, or too defocused to read.",
+        "Do not render readable Chinese or English text anywhere; signs, plaques, labels, uniforms, papers, and posters must be blank, shadowed, cropped, or too defocused to read.",
         "No watermark, no logo, no subtitles, no captions, no UI, no poster layout, no collage.",
+        "Lock motion direction with camera-relative framing: for action or direction shots use a back or over-the-shoulder view with the destination in the deep background; for dialogue use over-the-shoulder framing and avoid two large frontal faces.",
     ]
-    if atom_id == "AS001":
-        constraints.append(
-            "All visible students and parents must move from the outside road into the campus entrance; nobody should appear to be leaving the school."
-        )
-    if atom_id == "AS002":
-        constraints.append(
-            "This shot starts as a low-angle close-up of the fast spinning bicycle front wheel and pedals, then may rise to Chen Zhenfei riding anxiously. Keep a strong sense of speed from wheel rotation, pedal force, and road shadows."
-        )
-        constraints.append(
-            "The bicycle must move from the outside road toward the school entrance in the deep background. The front wheel and handlebar must point toward the campus gate, not sideways across the frame and not away from school."
-        )
-        constraints.append(
-            "The school gate must match the AS001 reference image: the same gray-white stone entrance, the same broad blank horizontal sign panel, the same retractable gate and camphor trees. Do not replace it with a different modern gate, blue billboard, vertical sign pillar, or new architecture."
-        )
-        constraints.append(
-            "The school gate can be distant or partly out of frame, but if visible it must stay the same gate from the reference and its sign must not contain readable characters."
-        )
-        constraints.append(
-            "Chen Zhenfei must wear a realistic blue-and-white summer school uniform with dark navy or black trousers and dark shoes. Do not give him white pants, white tracksuit bottoms, athletic training pants, or a full sports tracksuit."
-        )
     return prompt + "\n\n" + "\n".join(constraints)
 
 
@@ -510,6 +555,9 @@ class VideoGenerateArkSkill:
             return SkillResult(False, "没有找到 keyframes", {})
         clips = []
         previous: str | None = None
+        # 默认不把前一段视频当参考喂给视频生成：实测参考视频/参考图会把相机拽正、带歪方向，
+        # 还容易触发审核。方向由背影/过肩首帧锁定。仅在用户显式传 chain_reference_video 时才链式参考。
+        chain_reference_video = bool(input_data.get("chain_reference_video"))
         style_context = load_style_context(ctx)
         for kf in keyframes:
             try:
@@ -520,7 +568,7 @@ class VideoGenerateArkSkill:
                     video_prompt_with_style(str(kf.get("video_prompt", "")), style_context),
                     first_frame,
                     duration=int(kf.get("duration") or 5),
-                    reference_video_urls=[previous] if previous else None,
+                    reference_video_urls=[previous] if (chain_reference_video and previous) else None,
                 )
                 previous = url
                 local = ctx.ark.download(url, ctx.workspace.clips_dir / f"{safe_name(str(kf.get('atomic_shot_id')))}.mp4")
@@ -645,7 +693,8 @@ def frame_prompt(prompt: str, assets: list[dict[str, Any]] | None = None, style_
     asset_names = "、".join(str(asset.get("name", "")).strip() for asset in assets or [] if str(asset.get("name", "")).strip())
     base = (
         "竖屏9:16图生视频控制帧；电影写实风格；无文字、无品牌、无UI、无拼贴。"
-        "保持人物身份、服装、道具、地点、运动方向和物理状态连续。\n"
+        "保持人物身份、服装、道具、地点、运动方向和物理状态连续。"
+        "方向用相机相对语言；动作/方向镜用背影或过肩、把运动目的地放在画面纵深；对话镜用过肩、避免贴镜头大正脸。\n"
     )
     if style_context:
         base += f"风格摘要：{compact_style_summary(style_context)}\n"
@@ -656,7 +705,8 @@ def frame_prompt(prompt: str, assets: list[dict[str, Any]] | None = None, style_
         return full_prompt
     compact_base = (
         "竖屏9:16图生视频控制帧；电影写实风格；无文字、无品牌、无UI、无拼贴。"
-        "保持人物身份、服装、道具、地点、运动方向和物理状态连续。\n"
+        "保持人物身份、服装、道具、地点、运动方向和物理状态连续。"
+        "方向用相机相对语言；动作/方向镜用背影或过肩、把运动目的地放在画面纵深；对话镜用过肩、避免贴镜头大正脸。\n"
     )
     if style_context:
         compact_base += f"风格摘要：{compact_style_summary(style_context)}\n"
@@ -684,6 +734,7 @@ def clip_text(value: str, limit: int) -> str:
 
 
 def video_prompt_with_style(prompt: str, style_context: str = "") -> str:
+    prompt = f"{prompt}{CLEAN_FRAME_RULE}"
     if not style_context:
         return prompt
     return f"已选风格档案，必须严格遵守：\n{style_context}\n\n视频提示词：\n{prompt}"
