@@ -22,13 +22,19 @@ cp config.local.example.json config.local.json
 python -m storyforge.cli list-skills
 ```
 
-从已有剧本开始：
+从已有剧本文档开始：
 
 ```bash
-python -m storyforge.cli --project demo pipeline-from-script --script path/to/script.md
+python -m storyforge.cli pipeline-from-document --document path/to/script.docx
 ```
 
-这个命令会运行到 `keyframe_plan`，产出给 Codex 生成图片用的首帧/尾帧任务清单，先停在真实图片/视频生成前，方便人工或 LLM 审阅。
+支持 `.txt`、`.md`、`.docx`、`.pdf`。如果没有传 `--project`，Storyforge 会根据剧本文档标题/内容自动生成项目 ID，并把所有产物放在：
+
+```text
+projects/<auto-project-id>/
+```
+
+这个命令会先运行 `document_ingest`，再进入后续流程。如果项目还没有选择风格，会停在 `style_select`；选择风格后会继续运行到 `keyframe_plan`，产出给 Codex 生成图片用的首帧/尾帧任务清单。
 
 如果项目还没有选择风格，命令会先停在 `style_select`，在 `review/user_style_select.md` 里给出风格选项。选好后继续：
 
@@ -39,7 +45,7 @@ python -m storyforge.cli --project demo run style_select --input-json "{\"style\
 也可以在一开始就指定风格：
 
 ```bash
-python -m storyforge.cli --project demo pipeline-from-script --script path/to/script.md --style film
+python -m storyforge.cli pipeline-from-document --document path/to/script.pdf --style film
 ```
 
 当 Codex 生成的图片已经放到计划指定的 `keyframes/` 路径后，继续导入关键帧并生成视频：
@@ -70,6 +76,7 @@ projects/<project-id>/
   raw/
   wiki/
   stages/
+    00_document.json
     00_style.json
     01_script.json
     02_assets.json
@@ -124,6 +131,7 @@ python -m storyforge.cli --project demo run storyboard_plan --input-json "{\"ski
 
 Skill 契约位于 `storyforge_skills/*/SKILL.md`。
 
+- `document_ingest`：把 `.txt`、`.md`、`.docx`、`.pdf` 剧本文档抽取成 `raw/script.md`。
 - `script_ingest`：接收已有剧本，规范化场景、角色、地点、道具。
 - `style_select`：在剧本进入后立刻询问并记录生产风格。
 - `asset_design`：设计角色、地点、道具的视觉锚点提示词。

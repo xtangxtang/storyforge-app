@@ -4,7 +4,41 @@ import json
 from pathlib import Path
 from typing import Any
 
+from .document import extract_document_text
 from .skills import SkillContext, SkillRegistry, SkillResult, write_review_markdown
+
+
+class DocumentIngestSkill:
+    id = "document_ingest"
+    description = "Extract script text from txt, markdown, docx, or pdf documents into raw/script.md."
+
+    def run(self, ctx: SkillContext, input_data: dict[str, Any]) -> SkillResult:
+        document_path = input_data.get("document_path") or input_data.get("path") or input_data.get("script_path")
+        if not document_path:
+            return SkillResult(False, "Missing document_path", {})
+        extracted = extract_document_text(Path(str(document_path)))
+        source_dir = ctx.workspace.raw_dir / "source"
+        source_dir.mkdir(parents=True, exist_ok=True)
+        source_path = Path(extracted["source_path"])
+        copied_source = source_dir / source_path.name
+        copied_source.write_bytes(source_path.read_bytes())
+        ctx.workspace.raw_dir.joinpath("script.md").write_text(extracted["text"], encoding="utf-8")
+        out = {
+            "source": self.id,
+            "project_id": ctx.workspace.project_id,
+            "source_path": extracted["source_path"],
+            "source_name": extracted["source_name"],
+            "copied_source_path": str(copied_source.relative_to(ctx.workspace.root).as_posix()),
+            "parser": extracted["parser"],
+            "suffix": extracted["suffix"],
+            "character_count": extracted["character_count"],
+            "sha256": extracted["sha256"],
+            "raw_script_path": "raw/script.md",
+        }
+        ctx.workspace.write_stage("00_document.json", out)
+        write_review_markdown(ctx.workspace.review_dir / "00_document_ingest.md", "Document Ingest Review", out)
+        ctx.workspace.append_log("Document ingested", {"source": extracted["source_name"], "characters": extracted["character_count"]})
+        return SkillResult(True, "document ingested", {"file": "stages/00_document.json", "raw_script_path": "raw/script.md"})
 
 
 class ScriptIngestSkill:
@@ -16,6 +50,8 @@ class ScriptIngestSkill:
         script_path = input_data.get("script_path")
         if not script_text and script_path:
             script_text = Path(script_path).read_text(encoding="utf-8")
+        if not script_text and ctx.workspace.raw_dir.joinpath("script.md").exists():
+            script_text = ctx.workspace.raw_dir.joinpath("script.md").read_text(encoding="utf-8")
         if not script_text:
             return SkillResult(False, "Missing script_text or script_path", {})
 
@@ -406,6 +442,7 @@ class KnowledgeCaptureSkill:
 
 def default_registry() -> SkillRegistry:
     return SkillRegistry([
+        DocumentIngestSkill(),
         ScriptIngestSkill(),
         StyleSelectSkill(),
         AssetDesignSkill(),
@@ -618,6 +655,8 @@ def normalize_stage_name(value: str) -> str:
     if value.endswith(".json"):
         return value
     stage_map = {
+        "document": "00_document.json",
+        "document_ingest": "00_document.json",
         "style": "00_style.json",
         "style_select": "00_style.json",
         "script": "01_script.json",

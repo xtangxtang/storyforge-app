@@ -8,7 +8,7 @@ project workspace + skill contract -> skill runner -> reviewable outputs
 
 ## 设计目标
 
-- 给定一个已有剧本，可以从头推进到视频片段。
+- 给定一个已有剧本文档，可以从头推进到视频片段。
 - 每个阶段都产出可审阅、可修改、可恢复的文件。
 - LLM 可以直接调用 skill，不需要点击 UI。
 - 角色、地点、动作连续性通过结构化状态和关键帧控制，而不是靠随机多图猜测。
@@ -30,11 +30,13 @@ project workspace + skill contract -> skill runner -> reviewable outputs
 ```text
 projects/<project-id>/
   raw/
+    source/
     script.md
   wiki/
     style.md
     cards/
   stages/
+    00_document.json
     00_style.json
     01_script.json
     02_assets.json
@@ -84,6 +86,7 @@ knowledge/
 默认 skill：
 
 - `script_ingest`
+- `document_ingest`
 - `style_select`
 - `asset_design`
 - `storyboard_plan`
@@ -107,16 +110,34 @@ knowledge/
 默认无媒体生成路径：
 
 ```text
-script_ingest -> style_select -> asset_design -> storyboard_plan -> atomic_shot_plan -> keyframe_plan
+document_ingest -> script_ingest -> style_select -> asset_design -> storyboard_plan -> atomic_shot_plan -> keyframe_plan
 ```
 
 Codex 图片生成路径：
 
 ```text
-script_ingest -> style_select -> asset_design -> storyboard_plan -> atomic_shot_plan -> keyframe_plan -> Codex image generation -> keyframe_import -> video_generate_ark
+document_ingest -> script_ingest -> style_select -> asset_design -> storyboard_plan -> atomic_shot_plan -> keyframe_plan -> Codex image generation -> keyframe_import -> video_generate_ark
 ```
 
 `keyframe_generate_ark` 是备用路径，只在用户明确要求 Ark 自动生成图片时使用。
+
+## 文档导入与项目创建
+
+`document_ingest` 支持 `.txt`、`.md`、`.docx`、`.pdf`，会把原始文件复制到 `raw/source/`，把抽取文本写入 `raw/script.md`，并记录 `stages/00_document.json`。
+
+通过 CLI 运行：
+
+```bash
+python -m storyforge.cli pipeline-from-document --document path/to/script.docx
+```
+
+如果没有传 `--project`，CLI 会从文档标题/内容自动派生项目 ID，并在独立目录中运行：
+
+```text
+projects/<auto-project-id>/
+```
+
+旧 `.doc` 二进制文件不直接支持，需要先转换成 `.docx` 或 `.pdf`。
 
 知识增长路径：
 

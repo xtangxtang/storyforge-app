@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "LLM-native short video production workspace built around skills."
 requires-python = ">=3.10"
 dependencies = [
+  "pypdf>=4.0.0",
   "requests>=2.31.0",
 ]
 
