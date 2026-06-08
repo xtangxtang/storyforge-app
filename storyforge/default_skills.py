@@ -186,6 +186,73 @@ class VideoGenerateArkSkill:
         return SkillResult(True, "video generation completed", {"file": "stages/06_videos.json", "success": out["success"], "failed": out["failed"]})
 
 
+class KnowledgeCaptureSkill:
+    id = "knowledge_capture"
+    description = "Capture approved storyboard, shot, style, or prompt patterns into project/global knowledge cards."
+
+    def run(self, ctx: SkillContext, input_data: dict[str, Any]) -> SkillResult:
+        source_text, source_ref = resolve_capture_source(ctx, input_data)
+        if not source_text.strip():
+            return SkillResult(False, "Missing source_text, source_stage, or source_file", {})
+
+        scope = str(input_data.get("scope") or "project").lower()
+        if scope not in {"project", "global", "both"}:
+            return SkillResult(False, "scope must be project, global, or both", {})
+
+        tags = input_data.get("tags") or []
+        if isinstance(tags, str):
+            tags = [tag.strip() for tag in tags.split(",") if tag.strip()]
+        user_note = str(input_data.get("user_note") or input_data.get("note") or "").strip()
+        title_hint = str(input_data.get("title") or "").strip()
+
+        data = ctx.llm.chat_json(
+            "You are Storyforge knowledge_capture. Extract durable reusable production knowledge from an approved result. Output strict JSON {cards:[...]}. Each card has title, type, tags, summary, when_to_use, do, avoid, prompt_patterns, examples, source_refs. Capture what should be reused, what mistakes to avoid, and concrete prompt/camera/action patterns. Do not praise. Do not copy long source text.",
+            (
+                f"Title hint: {title_hint}\n"
+                f"User note: {user_note}\n"
+                f"Requested tags: {json.dumps(tags, ensure_ascii=False)}\n"
+                f"Source ref: {source_ref}\n\n"
+                f"Approved source:\n{source_text[:20000]}"
+            ),
+            temperature=float(input_data.get("temperature", 0.2)),
+            tag=self.id,
+        )
+        cards = list(data.get("cards") or [])
+        if not cards:
+            cards = [
+                {
+                    "title": title_hint or "Captured production pattern",
+                    "type": "style",
+                    "tags": tags,
+                    "summary": user_note or "Reusable production pattern captured from an approved Storyforge result.",
+                    "when_to_use": [],
+                    "do": [],
+                    "avoid": [],
+                    "prompt_patterns": [],
+                    "examples": [],
+                    "source_refs": [source_ref],
+                }
+            ]
+
+        written: list[str] = []
+        scopes = ["project", "global"] if scope == "both" else [scope]
+        for card in cards:
+            card.setdefault("source_refs", [source_ref])
+            existing_tags = card.get("tags") or []
+            if isinstance(existing_tags, str):
+                existing_tags = [existing_tags]
+            card["tags"] = sorted({str(tag) for tag in [*existing_tags, *tags] if str(tag).strip()})
+            for target_scope in scopes:
+                path = ctx.workspace.write_knowledge_card(card, scope=target_scope)
+                written.append(str(path))
+
+        review = {"source": self.id, "source_ref": source_ref, "scope": scope, "cards": cards, "written": written}
+        ctx.workspace.write_stage("07_knowledge_capture.json", review)
+        write_review_markdown(ctx.workspace.review_dir / "07_knowledge_capture.md", "Knowledge Capture Review", review)
+        ctx.workspace.append_log("Knowledge captured", {"source_ref": source_ref, "scope": scope, "cards": len(cards)})
+        return SkillResult(True, "knowledge captured", {"file": "stages/07_knowledge_capture.json", "cards": len(cards), "written": written})
+
+
 def default_registry() -> SkillRegistry:
     return SkillRegistry([
         ScriptIngestSkill(),
@@ -194,6 +261,7 @@ def default_registry() -> SkillRegistry:
         AtomicShotPlanSkill(),
         KeyframeGenerateSkill(),
         VideoGenerateArkSkill(),
+        KnowledgeCaptureSkill(),
     ])
 
 
@@ -228,3 +296,65 @@ def frame_prompt(prompt: str, assets: list[dict[str, Any]] | None = None) -> str
 def safe_name(value: str) -> str:
     cleaned = "".join(ch if ch.isalnum() or ch in "._-" else "_" for ch in value)
     return cleaned.strip("_") or "item"
+
+
+def resolve_capture_source(ctx: SkillContext, input_data: dict[str, Any]) -> tuple[str, str]:
+    source_text = str(input_data.get("source_text") or "").strip()
+    if source_text:
+        return source_text, "input:source_text"
+
+    source_file = input_data.get("source_file")
+    if source_file:
+        path = Path(str(source_file))
+        if not path.is_absolute():
+            path = ctx.workspace.root / path
+        if path.exists():
+            return path.read_text(encoding="utf-8"), f"file:{path}"
+
+    source_stage = input_data.get("source_stage")
+    if source_stage:
+        stage_name = normalize_stage_name(str(source_stage))
+        stage = ctx.workspace.read_stage(stage_name)
+        if not stage:
+            return "", f"stage:{stage_name}"
+        item_id = str(input_data.get("item_id") or "").strip()
+        if item_id:
+            item = find_object_by_id(stage, item_id)
+            if item is not None:
+                return json.dumps(item, ensure_ascii=False, indent=2), f"stage:{stage_name}#{item_id}"
+        return json.dumps(stage, ensure_ascii=False, indent=2), f"stage:{stage_name}"
+
+    return "", "none"
+
+
+def normalize_stage_name(value: str) -> str:
+    if value.endswith(".json"):
+        return value
+    stage_map = {
+        "script": "01_script.json",
+        "assets": "02_assets.json",
+        "storyboards": "03_storyboards.json",
+        "storyboard": "03_storyboards.json",
+        "atomic_shots": "04_atomic_shots.json",
+        "atomic": "04_atomic_shots.json",
+        "keyframes": "05_keyframes.json",
+        "videos": "06_videos.json",
+    }
+    return stage_map.get(value, value)
+
+
+def find_object_by_id(value: Any, item_id: str) -> Any:
+    if isinstance(value, dict):
+        for key in ["id", "storyboard_id", "atomic_shot_id", "name"]:
+            if str(value.get(key) or "") == item_id:
+                return value
+        for child in value.values():
+            found = find_object_by_id(child, item_id)
+            if found is not None:
+                return found
+    elif isinstance(value, list):
+        for child in value:
+            found = find_object_by_id(child, item_id)
+            if found is not None:
+                return found
+    return None

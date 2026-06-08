@@ -35,8 +35,11 @@ python -m storyforge.cli --project demo pipeline-from-script --script path/to/sc
 - `atomic_shot_plan`
 - `keyframe_generate`
 - `video_generate_ark`
+- `knowledge_capture`
 
 新增能力优先新增 skill，而不是新增 App screen 或 Dart service。
+
+当用户确认某个分镜、动作拆分、提示词或风格值得复用时，优先调用 `knowledge_capture`，把它写入项目级 `wiki/cards/` 或全局 `knowledge/cards/`。只有当知识卡变成稳定流程时，再升级成新的 skill。
 
 ## 约定
 

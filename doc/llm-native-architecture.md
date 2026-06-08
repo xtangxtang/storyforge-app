@@ -32,6 +32,7 @@ projects/<project-id>/
   raw/
     script.md
   wiki/
+    cards/
   stages/
     01_script.json
     02_assets.json
@@ -49,6 +50,16 @@ projects/<project-id>/
 
 `stages/*.json` 是后续 skill 的正式输入；`review/*.md` 是人工确认和 LLM 复核入口；`manifest.json` 记录每次 skill 运行，便于追踪和恢复。
 
+全局知识库位于仓库根目录：
+
+```text
+knowledge/
+  README.md
+  cards/
+```
+
+项目级知识适合当前故事的角色、地点和连续性；全局知识适合可跨项目复用的镜头风格、动作拆解方法、提示词模式和反例。
+
 ## Skill 契约
 
 每个 skill 至少包含两层契约：
@@ -64,6 +75,7 @@ projects/<project-id>/
 - `atomic_shot_plan`
 - `keyframe_generate`
 - `video_generate_ark`
+- `knowledge_capture`
 
 新增 skill 时应明确：
 
@@ -86,6 +98,20 @@ script_ingest -> asset_design -> storyboard_plan -> atomic_shot_plan
 ```text
 script_ingest -> asset_design -> storyboard_plan -> atomic_shot_plan -> keyframe_generate -> video_generate_ark
 ```
+
+知识增长路径：
+
+```text
+approved stage/review/user note -> knowledge_capture -> wiki/cards + knowledge/cards -> future context_pack
+```
+
+当用户确认“这个分镜不错”时，可以调用：
+
+```bash
+python -m storyforge.cli --project demo run knowledge_capture --input-json "{\"source_stage\":\"storyboards\",\"item_id\":\"sb_001\",\"scope\":\"both\",\"tags\":[\"campus\",\"collision\"]}"
+```
+
+之后 `context_pack()` 会自动检索项目级和全局知识卡，并把相关内容注入后续 LLM 调用。
 
 ## 连续性策略
 

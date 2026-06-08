@@ -88,6 +88,24 @@ Skill 契约位于 `storyforge_skills/*/SKILL.md`。
 - `atomic_shot_plan`：把分镜拆成物理逻辑更稳定的原子镜头。
 - `keyframe_generate`：为原子镜头生成首帧/尾帧。
 - `video_generate_ark`：使用 Ark Seedance 生成视频片段。
+- `knowledge_capture`：把用户认可的分镜、原子镜头、提示词或风格提炼成可复用知识卡。
+
+## 自我增长知识库
+
+当某个分镜、动作拆解、镜头风格或提示词效果不错时，可以把它沉淀为知识卡：
+
+```bash
+python -m storyforge.cli --project demo run knowledge_capture --input-json "{\"source_stage\":\"storyboards\",\"item_id\":\"sb_001\",\"scope\":\"both\",\"tags\":[\"campus\",\"collision\",\"soft-comedy\"],\"user_note\":\"这个校园相撞开场的节奏、方向和切镜方式后续可复用。\"}"
+```
+
+知识卡会写入：
+
+```text
+projects/<project-id>/wiki/cards/   # 项目级知识
+knowledge/cards/                    # 全局可复用知识
+```
+
+后续 `asset_design`、`storyboard_plan`、`atomic_shot_plan` 会通过 `context_pack()` 自动读取这些知识。也就是说，好的结果可以变成之后生成时的本地经验。
 
 ## 连续性策略
 

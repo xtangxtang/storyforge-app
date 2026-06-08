@@ -51,6 +51,7 @@ storyforge list-skills
 - `atomic_shot_plan`：把复杂动作拆成物理上更可信的原子镜头。
 - `keyframe_generate`：为每个原子镜头生成首帧/尾帧控制图。
 - `video_generate_ark`：使用 Ark Seedance 从关键帧生成视频片段。
+- `knowledge_capture`：把用户认可的分镜、动作拆解、提示词或风格提炼成项目级/全局知识卡。
 
 新增能力时优先新增一个 skill，并在 `storyforge_skills/<skill_id>/SKILL.md` 写清输入、输出、约束和人工确认点。
 
@@ -62,6 +63,7 @@ storyforge list-skills
 projects/<project-id>/
   raw/
   wiki/
+    cards/
   stages/
     01_script.json
     02_assets.json
@@ -78,6 +80,8 @@ projects/<project-id>/
 ```
 
 `stages/*.json` 是机器可读的阶段产物；`review/*.md` 是给用户或 LLM 审阅修改的摘要；`manifest.json` 记录 skill 运行历史。
+
+全局可复用知识放在仓库根目录的 `knowledge/cards/`。当用户确认某个分镜、镜头语言、动作拆分或提示词很好时，先调用 `knowledge_capture` 沉淀成知识卡；只有当这个模式需要稳定执行步骤时，才升级成新的 skill。
 
 ## 连续性原则
 
