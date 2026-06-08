@@ -12,7 +12,7 @@ project workspace + skill contract -> skill runner -> reviewable outputs
 - 每个阶段都产出可审阅、可修改、可恢复的文件。
 - LLM 可以直接调用 skill，不需要点击 UI。
 - 角色、地点、动作连续性通过结构化状态和关键帧控制，而不是靠随机多图猜测。
-- 视频生成暂时只走 Ark Seedance；DashScope/Seedance Web 不作为默认路径。
+- 图片生成默认由 Codex 在对话环境中完成；视频生成暂时只走 Ark Seedance。
 
 ## 运行时模块
 
@@ -38,6 +38,7 @@ projects/<project-id>/
     02_assets.json
     03_storyboards.json
     04_atomic_shots.json
+    05_keyframe_plan.json
     05_keyframes.json
     06_videos.json
   assets/
@@ -73,7 +74,9 @@ knowledge/
 - `asset_design`
 - `storyboard_plan`
 - `atomic_shot_plan`
-- `keyframe_generate`
+- `keyframe_plan`
+- `keyframe_import`
+- `keyframe_generate_ark`
 - `video_generate_ark`
 - `knowledge_capture`
 
@@ -93,11 +96,13 @@ knowledge/
 script_ingest -> asset_design -> storyboard_plan -> atomic_shot_plan
 ```
 
-带媒体生成路径：
+Codex 图片生成路径：
 
 ```text
-script_ingest -> asset_design -> storyboard_plan -> atomic_shot_plan -> keyframe_generate -> video_generate_ark
+script_ingest -> asset_design -> storyboard_plan -> atomic_shot_plan -> keyframe_plan -> Codex image generation -> keyframe_import -> video_generate_ark
 ```
+
+`keyframe_generate_ark` 是备用路径，只在用户明确要求 Ark 自动生成图片时使用。
 
 知识增长路径：
 
@@ -126,7 +131,9 @@ python -m storyforge.cli --project demo run knowledge_capture --input-json "{\"s
 - `storyboard_plan` 只负责叙事和镜头节奏；
 - `atomic_shot_plan` 把复杂动作拆成短镜头，并写清开始/结束状态；
 - `asset_design` 只设计角色、地点、道具的视觉锚点提示词；
-- `keyframe_generate` 为每个原子镜头生成首帧和尾帧；
+- `keyframe_plan` 为每个原子镜头规划首帧和尾帧任务；
+- Codex 在对话环境中生成图片，并把图片放到计划指定路径；
+- `keyframe_import` 把本地图片登记为 `stages/05_keyframes.json`；
 - `video_generate_ark` 用首帧驱动视频，并在可用时传入前序片段作为参考；
 - 碰撞、急刹、转向、遮挡等困难动作优先切成多个短镜头。
 

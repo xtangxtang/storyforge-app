@@ -5,7 +5,7 @@ Storyforge 是一个 **LLM-native 短视频生成工作区**。
 它不再是 Flutter 桌面应用，而是围绕 skill、项目文件和可审阅阶段产物构建。目标是：给定一个剧本，LLM 可以按阶段调用 skill，设计角色/场景视觉锚点，生成分镜、原子镜头、关键帧，并通过 Ark Seedance 生成视频片段。
 
 ```text
-script -> assets -> storyboards -> atomic shots -> keyframes -> Ark videos
+script -> assets -> storyboards -> atomic shots -> keyframe plan -> Codex images -> Ark videos
 ```
 
 ## 快速开始
@@ -28,9 +28,9 @@ python -m storyforge.cli list-skills
 python -m storyforge.cli --project demo pipeline-from-script --script path/to/script.md
 ```
 
-这个命令会运行到 `atomic_shot_plan`，先停在图片/视频生成前，方便人工或 LLM 审阅。
+这个命令会运行到 `keyframe_plan`，产出给 Codex 生成图片用的首帧/尾帧任务清单，先停在真实图片/视频生成前，方便人工或 LLM 审阅。
 
-确认后继续生成关键帧和视频：
+当 Codex 生成的图片已经放到计划指定的 `keyframes/` 路径后，继续导入关键帧并生成视频：
 
 ```bash
 python -m storyforge.cli --project demo pipeline-from-script --script path/to/script.md --with-media
@@ -61,6 +61,7 @@ projects/<project-id>/
     02_assets.json
     03_storyboards.json
     04_atomic_shots.json
+    05_keyframe_plan.json
     05_keyframes.json
     06_videos.json
   assets/
@@ -86,7 +87,9 @@ Skill 契约位于 `storyforge_skills/*/SKILL.md`。
 - `asset_design`：设计角色、地点、道具的视觉锚点提示词。
 - `storyboard_plan`：生成分镜计划。
 - `atomic_shot_plan`：把分镜拆成物理逻辑更稳定的原子镜头。
-- `keyframe_generate`：为原子镜头生成首帧/尾帧。
+- `keyframe_plan`：为 Codex 图片生成准备首帧/尾帧任务清单。
+- `keyframe_import`：导入 Codex 已生成的本地关键帧图片。
+- `keyframe_generate_ark`：可选备用路径，通过 Ark 生成关键帧图片。
 - `video_generate_ark`：使用 Ark Seedance 生成视频片段。
 - `knowledge_capture`：把用户认可的分镜、原子镜头、提示词或风格提炼成可复用知识卡。
 
@@ -116,7 +119,7 @@ Storyforge 不再默认给每个分镜生成随机九宫格。九宫格容易变
 - 先把复杂动作拆成短的原子镜头；
 - 每个原子镜头明确开始状态和结束状态；
 - 通过角色/地点视觉锚点提示词保持身份一致；
-- 通过首帧/尾帧控制图约束图生视频；
+- 通过 Codex 生成的首帧/尾帧控制图约束图生视频；
 - 对碰撞、急刹、转向等困难动作使用切镜、反应镜头或特写来保持物理可信；
 - 只在确实需要探索构图时生成多候选图。
 

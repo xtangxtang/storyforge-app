@@ -33,7 +33,9 @@ python -m storyforge.cli --project demo pipeline-from-script --script path/to/sc
 - `asset_design`
 - `storyboard_plan`
 - `atomic_shot_plan`
-- `keyframe_generate`
+- `keyframe_plan`
+- `keyframe_import`
+- `keyframe_generate_ark`
 - `video_generate_ark`
 - `knowledge_capture`
 

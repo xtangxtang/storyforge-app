@@ -115,9 +115,94 @@ class AtomicShotPlanSkill:
         return SkillResult(True, "atomic shots planned", {"file": "stages/04_atomic_shots.json", "count": len(atoms)})
 
 
-class KeyframeGenerateSkill:
-    id = "keyframe_generate"
-    description = "Generate first/last control frames for atomic shots."
+class KeyframePlanSkill:
+    id = "keyframe_plan"
+    description = "Plan first/last keyframe image tasks for Codex-assisted image generation."
+
+    def run(self, ctx: SkillContext, input_data: dict[str, Any]) -> SkillResult:
+        atoms = list(ctx.workspace.read_stage("04_atomic_shots.json").get("atomic_shots") or [])
+        if not atoms:
+            return SkillResult(False, "No atomic shots found", {})
+        asset_context = load_asset_context(ctx)
+        tasks = []
+        for atom in atoms:
+            atom_id = str(atom.get("id"))
+            named_assets = [asset_context[n] for n in atom.get("reference_asset_names", []) if n in asset_context]
+            first_path = Path("keyframes") / f"{safe_name(atom_id)}_first.png"
+            last_path = Path("keyframes") / f"{safe_name(atom_id)}_last.png"
+            tasks.append(
+                {
+                    "atomic_shot_id": atom_id,
+                    "storyboard_id": atom.get("storyboard_id"),
+                    "duration": atom.get("duration", 5),
+                    "video_prompt": atom.get("video_prompt", ""),
+                    "first_frame_prompt": frame_prompt(str(atom.get("first_frame_prompt", "")), named_assets),
+                    "last_frame_prompt": frame_prompt(str(atom.get("last_frame_prompt", "")), named_assets),
+                    "first_frame_local_path": str(first_path),
+                    "last_frame_local_path": str(last_path),
+                    "status": "needs_codex_image_generation",
+                }
+            )
+        out = {"source": self.id, "image_provider": "codex", "keyframe_tasks": tasks}
+        ctx.workspace.write_stage("05_keyframe_plan.json", out)
+        write_review_markdown(ctx.workspace.review_dir / "05_keyframe_plan.md", "Keyframe Plan Review", out)
+        return SkillResult(True, "keyframe image tasks planned", {"file": "stages/05_keyframe_plan.json", "count": len(tasks)})
+
+
+class KeyframeImportSkill:
+    id = "keyframe_import"
+    description = "Import Codex-created local keyframe images into stages/05_keyframes.json."
+
+    def run(self, ctx: SkillContext, input_data: dict[str, Any]) -> SkillResult:
+        plan = ctx.workspace.read_stage("05_keyframe_plan.json")
+        tasks = list(plan.get("keyframe_tasks") or [])
+        explicit_images = normalize_keyframe_images(input_data.get("images") or input_data.get("keyframes") or [])
+        if not tasks and not explicit_images:
+            return SkillResult(False, "No keyframe plan or input images found", {})
+
+        imported = []
+        missing = []
+        source_rows = tasks or list(explicit_images.values())
+        for row in source_rows:
+            atom_id = str(row.get("atomic_shot_id") or row.get("id") or "")
+            if not atom_id:
+                missing.append({"reason": "missing atomic_shot_id", "row": row})
+                continue
+            explicit = explicit_images.get(atom_id, {}) if isinstance(explicit_images, dict) else {}
+            first_path = resolve_workspace_path(ctx, explicit.get("first_frame_local_path") or row.get("first_frame_local_path"))
+            last_path = resolve_workspace_path(ctx, explicit.get("last_frame_local_path") or row.get("last_frame_local_path"))
+            row_missing = []
+            if not first_path or not first_path.exists():
+                row_missing.append("first_frame_local_path")
+            if not last_path or not last_path.exists():
+                row_missing.append("last_frame_local_path")
+            if row_missing:
+                missing.append({"atomic_shot_id": atom_id, "missing": row_missing, "expected": {"first": str(first_path), "last": str(last_path)}})
+                continue
+            imported.append(
+                {
+                    "atomic_shot_id": atom_id,
+                    "storyboard_id": row.get("storyboard_id"),
+                    "duration": row.get("duration", 5),
+                    "video_prompt": row.get("video_prompt", ""),
+                    "first_frame_local_path": str(first_path),
+                    "last_frame_local_path": str(last_path),
+                    "image_provider": "codex",
+                    "status": "imported",
+                }
+            )
+
+        out = {"source": self.id, "image_provider": "codex", "keyframes": imported, "missing": missing}
+        ctx.workspace.write_stage("05_keyframes.json", out)
+        write_review_markdown(ctx.workspace.review_dir / "05_keyframes.md", "Keyframe Import Review", out)
+        ok = len(imported) > 0 and not missing
+        message = "keyframes imported" if ok else "keyframe import incomplete"
+        return SkillResult(ok, message, {"file": "stages/05_keyframes.json", "imported": len(imported), "missing": len(missing)})
+
+
+class KeyframeGenerateArkSkill:
+    id = "keyframe_generate_ark"
+    description = "Optional fallback: generate first/last control frames via Ark image generation."
 
     def run(self, ctx: SkillContext, input_data: dict[str, Any]) -> SkillResult:
         atoms = list(ctx.workspace.read_stage("04_atomic_shots.json").get("atomic_shots") or [])
@@ -149,9 +234,10 @@ class KeyframeGenerateSkill:
                     "first_frame_local_path": str(first_path),
                     "last_frame_url": last_url,
                     "last_frame_local_path": str(last_path),
+                    "image_provider": "ark",
                 }
             )
-        out = {"source": self.id, "keyframes": keyframes}
+        out = {"source": self.id, "image_provider": "ark", "keyframes": keyframes}
         ctx.workspace.write_stage("05_keyframes.json", out)
         write_review_markdown(ctx.workspace.review_dir / "05_keyframes.md", "Keyframe Review", out)
         return SkillResult(True, "keyframes generated", {"file": "stages/05_keyframes.json", "count": len(keyframes)})
@@ -169,9 +255,12 @@ class VideoGenerateArkSkill:
         previous: str | None = None
         for kf in keyframes:
             try:
+                first_frame = str(kf.get("first_frame_url") or kf.get("first_frame_local_path") or "")
+                if not first_frame:
+                    raise ValueError(f"Missing first frame for {kf.get('atomic_shot_id')}")
                 url = ctx.ark.generate_video(
                     str(kf.get("video_prompt", "")),
-                    str(kf.get("first_frame_url", "")),
+                    first_frame,
                     duration=int(kf.get("duration") or 5),
                     reference_video_urls=[previous] if previous else None,
                 )
@@ -259,7 +348,9 @@ def default_registry() -> SkillRegistry:
         AssetDesignSkill(),
         StoryboardPlanSkill(),
         AtomicShotPlanSkill(),
-        KeyframeGenerateSkill(),
+        KeyframePlanSkill(),
+        KeyframeImportSkill(),
+        KeyframeGenerateArkSkill(),
         VideoGenerateArkSkill(),
         KnowledgeCaptureSkill(),
     ])
@@ -296,6 +387,29 @@ def frame_prompt(prompt: str, assets: list[dict[str, Any]] | None = None) -> str
 def safe_name(value: str) -> str:
     cleaned = "".join(ch if ch.isalnum() or ch in "._-" else "_" for ch in value)
     return cleaned.strip("_") or "item"
+
+
+def normalize_keyframe_images(value: Any) -> dict[str, dict[str, Any]]:
+    if isinstance(value, dict):
+        if "atomic_shot_id" in value:
+            return {str(value["atomic_shot_id"]): value}
+        return {str(key): dict(item) for key, item in value.items() if isinstance(item, dict)}
+    if isinstance(value, list):
+        out: dict[str, dict[str, Any]] = {}
+        for item in value:
+            if isinstance(item, dict) and item.get("atomic_shot_id"):
+                out[str(item["atomic_shot_id"])] = item
+        return out
+    return {}
+
+
+def resolve_workspace_path(ctx: SkillContext, value: Any) -> Path | None:
+    if not value:
+        return None
+    path = Path(str(value))
+    if path.is_absolute():
+        return path
+    return ctx.workspace.root / path
 
 
 def resolve_capture_source(ctx: SkillContext, input_data: dict[str, Any]) -> tuple[str, str]:
@@ -337,6 +451,8 @@ def normalize_stage_name(value: str) -> str:
         "storyboard": "03_storyboards.json",
         "atomic_shots": "04_atomic_shots.json",
         "atomic": "04_atomic_shots.json",
+        "keyframe_plan": "05_keyframe_plan.json",
+        "keyframe_tasks": "05_keyframe_plan.json",
         "keyframes": "05_keyframes.json",
         "videos": "06_videos.json",
     }

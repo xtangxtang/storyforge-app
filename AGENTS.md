@@ -49,7 +49,9 @@ storyforge list-skills
 - `asset_design`：设计角色、地点、道具的视觉锚点提示词。
 - `storyboard_plan`：按剧本规划分镜，不直接生成九宫格。
 - `atomic_shot_plan`：把复杂动作拆成物理上更可信的原子镜头。
-- `keyframe_generate`：为每个原子镜头生成首帧/尾帧控制图。
+- `keyframe_plan`：为 Codex 图片生成准备首帧/尾帧任务清单。
+- `keyframe_import`：导入 Codex 已生成的本地关键帧图片。
+- `keyframe_generate_ark`：可选备用路径，通过 Ark 生成关键帧图片。
 - `video_generate_ark`：使用 Ark Seedance 从关键帧生成视频片段。
 - `knowledge_capture`：把用户认可的分镜、动作拆解、提示词或风格提炼成项目级/全局知识卡。
 
@@ -69,6 +71,7 @@ projects/<project-id>/
     02_assets.json
     03_storyboards.json
     04_atomic_shots.json
+    05_keyframe_plan.json
     05_keyframes.json
     06_videos.json
   assets/

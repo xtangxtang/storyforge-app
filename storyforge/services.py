@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import base64
 import json
+import mimetypes
 import re
 import time
 from pathlib import Path
@@ -101,9 +103,10 @@ class ArkClient:
 
     def generate_video(self, prompt: str, first_frame_url: str, duration: int = 5, reference_video_urls: list[str] | None = None) -> str:
         prompt_en = self.llm.translate_visual_prompt(prompt)
+        first_frame_ref = media_ref(first_frame_url)
         content: list[dict[str, Any]] = [
             {"type": "text", "text": f"{prompt_en} --ratio 9:16 --resolution 720p --duration {max(3, min(10, duration))}"},
-            {"type": "image_url", "image_url": {"url": first_frame_url}, "role": "first_frame"},
+            {"type": "image_url", "image_url": {"url": first_frame_ref}, "role": "first_frame"},
         ]
         for url in (reference_video_urls or [])[:3]:
             content.append({"type": "video_url", "video_url": {"url": url}, "role": "reference_video"})
@@ -162,3 +165,14 @@ def parse_json_object(text: str) -> dict[str, Any]:
     if not isinstance(data, dict):
         raise ValueError("Expected JSON object")
     return data
+
+
+def media_ref(value: str) -> str:
+    if value.startswith(("http://", "https://", "data:")):
+        return value
+    path = Path(value)
+    if not path.exists():
+        return value
+    mime_type = mimetypes.guess_type(path.name)[0] or "image/png"
+    encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+    return f"data:{mime_type};base64,{encoded}"

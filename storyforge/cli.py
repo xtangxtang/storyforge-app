@@ -26,7 +26,7 @@ def main(argv: list[str] | None = None) -> int:
 
     pipe = sub.add_parser("pipeline-from-script")
     pipe.add_argument("--script", required=True, help="Path to script text/markdown")
-    pipe.add_argument("--with-media", action="store_true", help="Also run keyframe/video generation")
+    pipe.add_argument("--with-media", action="store_true", help="Import existing Codex keyframes and run Ark video generation")
 
     args = parser.parse_args(argv)
     registry = default_registry()
@@ -52,9 +52,9 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if result.ok else 1
 
     if args.cmd == "pipeline-from-script":
-        sequence = ["script_ingest", "asset_design", "storyboard_plan", "atomic_shot_plan"]
+        sequence = ["script_ingest", "asset_design", "storyboard_plan", "atomic_shot_plan", "keyframe_plan"]
         if args.with_media:
-            sequence.extend(["keyframe_generate", "video_generate_ark"])
+            sequence.extend(["keyframe_import", "video_generate_ark"])
         script_path = Path(args.script)
         input_data = {"script_path": str(script_path)}
         for skill_id in sequence:

@@ -19,6 +19,8 @@ review/06_videos.md
 ## Rules
 
 - Run only after keyframes are reviewed.
+- Keyframes can come from `keyframe_import` using Codex-created local images, or from the optional `keyframe_generate_ark` fallback.
+- Local first-frame images are converted to data URLs before submitting to Ark.
 - Pass previous clip as a reference when possible to improve continuity.
 - Preserve each atomic shot's start/end state and physical intent.
 - Failed clips are recorded in `stages/06_videos.json` instead of aborting the
