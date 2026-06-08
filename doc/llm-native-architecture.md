@@ -51,6 +51,17 @@ projects/<project-id>/
 
 `stages/*.json` 是后续 skill 的正式输入；`review/*.md` 是人工确认和 LLM 复核入口；`manifest.json` 记录每次 skill 运行，便于追踪和恢复。
 
+每个 stage 成功产出后，`SkillRunner` 会自动生成两类审阅文件：
+
+```text
+review/agent_<skill_id>.md
+review/user_<skill_id>.md
+```
+
+`agent_<skill_id>.md` 是 `stage_review_agent` 的先行审阅，检查故事保真、连续性、物理逻辑、字段完整性、下一阶段可用性和可沉淀知识。
+
+`user_<skill_id>.md` 是交给用户审阅的材料包，包含 agent 结论、用户重点检查项、修改请求、风险和 stage 原文。
+
 全局知识库位于仓库根目录：
 
 ```text
@@ -93,7 +104,7 @@ knowledge/
 默认无媒体生成路径：
 
 ```text
-script_ingest -> asset_design -> storyboard_plan -> atomic_shot_plan
+script_ingest -> asset_design -> storyboard_plan -> atomic_shot_plan -> keyframe_plan
 ```
 
 Codex 图片生成路径：
@@ -117,6 +128,16 @@ python -m storyforge.cli --project demo run knowledge_capture --input-json "{\"s
 ```
 
 之后 `context_pack()` 会自动检索项目级和全局知识卡，并把相关内容注入后续 LLM 调用。
+
+## 审阅与确认
+
+Storyforge 的 stage 不应该直接“静默进入下一步”。每个 stage 的可审阅材料分三层：
+
+- `stages/*.json`：机器可读产物。
+- `review/agent_<skill_id>.md`：agent 先行审阅。
+- `review/user_<skill_id>.md`：用户确认材料包。
+
+CLI 批量 pipeline 会为每个 stage 留下这些文件；更严格的人工确认流程应逐个运行 skill，用户确认 `user_<skill_id>.md` 后再运行下一步。
 
 ## 连续性策略
 

@@ -86,6 +86,19 @@ projects/<project-id>/
 
 全局可复用知识放在仓库根目录的 `knowledge/cards/`。当用户确认某个分镜、镜头语言、动作拆分或提示词很好时，先调用 `knowledge_capture` 沉淀成知识卡；只有当这个模式需要稳定执行步骤时，才升级成新的 skill。
 
+## Stage Review Rule
+
+每个 stage 成功产出后，必须先由 `stage_review_agent` 审阅，再交给用户审阅。通用流程由 `SkillRunner` 执行：
+
+```text
+skill output -> review/agent_<skill_id>.md -> review/user_<skill_id>.md
+```
+
+- `agent_<skill_id>.md`：agent 的先行审阅，包含分数、结论、风险、连续性检查和修改建议。
+- `user_<skill_id>.md`：交给用户确认的材料包，包含 agent 结论、用户重点检查项、修改请求和 stage 原文。
+- 新增 skill 时返回的 `SkillResult.data` 应包含 `file`，指向主要 stage 产物，这样审阅 agent 能读到正确材料。
+- 只有在明确需要跳过时才允许传 `skip_agent_review: true`。
+
 ## 连续性原则
 
 不要把一个动作简单拆成多张互不关联的图来赌视频会连贯。默认策略是：

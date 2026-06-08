@@ -2,7 +2,7 @@
 
 Storyforge 是一个 **LLM-native 短视频生成工作区**。
 
-它不再是 Flutter 桌面应用，而是围绕 skill、项目文件和可审阅阶段产物构建。目标是：给定一个剧本，LLM 可以按阶段调用 skill，设计角色/场景视觉锚点，生成分镜、原子镜头、关键帧，并通过 Ark Seedance 生成视频片段。
+它不再是 Flutter 桌面应用，而是围绕 skill、项目文件和可审阅阶段产物构建。目标是：给定一个剧本，LLM 可以按阶段调用 skill，设计角色/场景视觉锚点，生成分镜、原子镜头、关键帧任务，并通过 Ark Seedance 生成视频片段。
 
 ```text
 script -> assets -> storyboards -> atomic shots -> keyframe plan -> Codex images -> Ark videos
@@ -33,7 +33,8 @@ python -m storyforge.cli --project demo pipeline-from-script --script path/to/sc
 当 Codex 生成的图片已经放到计划指定的 `keyframes/` 路径后，继续导入关键帧并生成视频：
 
 ```bash
-python -m storyforge.cli --project demo pipeline-from-script --script path/to/script.md --with-media
+python -m storyforge.cli --project demo run keyframe_import
+python -m storyforge.cli --project demo run video_generate_ark
 ```
 
 也可以单独运行某个 skill：
@@ -73,11 +74,38 @@ projects/<project-id>/
 ```
 
 - `stages/*.json`：机器可读阶段产物。
-- `review/*.md`：给用户或 LLM 审阅修改的阶段摘要。
+- `review/*.md`：阶段摘要和审阅材料。
+- `review/agent_<skill>.md`：stage 完成后由审阅 agent 先检查风险、连续性和修改建议。
+- `review/user_<skill>.md`：整理给用户最终确认的审阅材料包。
 - `assets/`：可选的角色、地点、道具视觉锚点图。
 - `keyframes/`：每个原子镜头的首帧/尾帧。
 - `clips/`：Ark 图生视频生成的片段。
 - `manifest.json`：skill 运行历史。
+
+## Stage 审阅机制
+
+每个 skill 成功产出 stage 后，`SkillRunner` 会自动触发 `stage_review_agent`：
+
+```text
+skill output -> agent review -> user review package
+```
+
+产物包括：
+
+```text
+review/agent_<skill_id>.md
+review/user_<skill_id>.md
+```
+
+`agent_<skill_id>.md` 是 agent 的先行审阅，包含分数、结论、风险、连续性检查和修改建议。
+
+`user_<skill_id>.md` 是交给你审阅的材料包，包含 agent 结论、你需要重点看的问题、修改请求和 stage 原文。
+
+如果确实只想跑机器阶段、不做审阅，可以传：
+
+```bash
+python -m storyforge.cli --project demo run storyboard_plan --input-json "{\"skip_agent_review\":true}"
+```
 
 ## 默认 Skill
 

@@ -43,6 +43,17 @@ python -m storyforge.cli --project demo pipeline-from-script --script path/to/sc
 
 当用户确认某个分镜、动作拆分、提示词或风格值得复用时，优先调用 `knowledge_capture`，把它写入项目级 `wiki/cards/` 或全局 `knowledge/cards/`。只有当知识卡变成稳定流程时，再升级成新的 skill。
 
+## Stage Review
+
+每个 stage 成功产出后，`SkillRunner` 会先调用 `stage_review_agent`，再生成给用户看的审阅材料包：
+
+```text
+review/agent_<skill_id>.md
+review/user_<skill_id>.md
+```
+
+新增 skill 时应在 `SkillResult.data` 中返回主要 stage 文件路径 `file`，让审阅 agent 能读取正确材料。
+
 ## 约定
 
 - 用中文与用户沟通。
