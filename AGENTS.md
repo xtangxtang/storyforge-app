@@ -9,7 +9,7 @@ Storyforge 已转为 **LLM-native 短视频生成工作区**。它不再以 Flut
 当前核心模型是：
 
 ```text
-剧本 -> skill -> 可审阅 stage 文件 -> 视觉锚点 -> 关键帧 -> Ark 图生视频
+剧本 -> 风格选择 -> skill -> 可审阅 stage 文件 -> 视觉锚点 -> 关键帧 -> Ark 图生视频
 ```
 
 LLM、人工操作者或 CLI 都可以直接调用 skill。项目状态以文件形式保存在 `projects/<project-id>/` 下，便于暂停、审阅、修改和继续。
@@ -46,6 +46,7 @@ storyforge list-skills
 ## 默认 Skill
 
 - `script_ingest`：接收已有剧本，规范化场景、角色、地点、道具。
+- `style_select`：剧本进入后立刻询问电影/短剧/漫剧/动画/纪实等生产风格，并写入风格档案。
 - `asset_design`：设计角色、地点、道具的视觉锚点提示词。
 - `storyboard_plan`：按剧本规划分镜，不直接生成九宫格。
 - `atomic_shot_plan`：把复杂动作拆成物理上更可信的原子镜头。
@@ -67,6 +68,7 @@ projects/<project-id>/
   wiki/
     cards/
   stages/
+    00_style.json
     01_script.json
     02_assets.json
     03_storyboards.json
@@ -85,6 +87,8 @@ projects/<project-id>/
 `stages/*.json` 是机器可读的阶段产物；`review/*.md` 是给用户或 LLM 审阅修改的摘要；`manifest.json` 记录 skill 运行历史。
 
 全局可复用知识放在仓库根目录的 `knowledge/cards/`。当用户确认某个分镜、镜头语言、动作拆分或提示词很好时，先调用 `knowledge_capture` 沉淀成知识卡；只有当这个模式需要稳定执行步骤时，才升级成新的 skill。
+
+`style_select` 是 `script_ingest` 之后的强制确认点。后续所有视觉锚点、分镜、原子镜头、关键帧 prompt、视频 prompt 都必须读取 `wiki/style.md` 和 `stages/00_style.json`，并按所选风格构建。更换风格后应重跑后续创作 stage。
 
 ## Stage Review Rule
 

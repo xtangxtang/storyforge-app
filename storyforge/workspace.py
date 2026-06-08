@@ -101,6 +101,7 @@ class ProjectWorkspace:
             )
         for name, title in [
             ("index.md", "Project Wiki"),
+            ("style.md", "Style Profile"),
             ("knowledge.md", "Living Knowledge"),
             ("continuity.md", "Continuity"),
             ("decisions.md", "Decisions"),
@@ -156,14 +157,16 @@ class ProjectWorkspace:
             parts.append(f"---\nsource: retrieved_knowledge_cards\n\n{cards}")
         for path in [
             self.raw_dir / "script.md",
+            self.wiki_dir / "style.md",
             self.wiki_dir / "knowledge.md",
             self.wiki_dir / "continuity.md",
+            self.stage_path("00_style.json"),
             self.stage_path("01_script.json"),
             self.stage_path("02_assets.json"),
             self.stage_path("03_storyboards.json"),
         ]:
             if path.exists():
-                parts.append(f"---\nsource: {path.relative_to(self.root)}\n\n{path.read_text(encoding='utf-8')[:12000]}")
+                parts.append(f"---\nsource: {path.relative_to(self.root).as_posix()}\n\n{path.read_text(encoding='utf-8')[:12000]}")
         return "\n\n".join(parts)
 
     def retrieve_knowledge_cards(self, tags: list[str] | None = None, limit: int = 12) -> list[dict[str, str]]:

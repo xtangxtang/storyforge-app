@@ -5,7 +5,7 @@ Storyforge 现在是 **LLM-native 短视频生成工作区**，不是 Flutter/Da
 ## 核心模型
 
 ```text
-已有剧本 -> skill 编排 -> stage/review 文件 -> 视觉锚点 -> 关键帧 -> Ark 图生视频
+已有剧本 -> 风格选择 -> skill 编排 -> stage/review 文件 -> 视觉锚点 -> 关键帧 -> Ark 图生视频
 ```
 
 项目状态保存在 `projects/<project-id>/`。LLM、CLI 或人工操作者都可以直接调用 skill，并在每个阶段审阅和修改产物。
@@ -30,6 +30,7 @@ python -m storyforge.cli --project demo pipeline-from-script --script path/to/sc
 ## 默认 Skill
 
 - `script_ingest`
+- `style_select`
 - `asset_design`
 - `storyboard_plan`
 - `atomic_shot_plan`
@@ -40,6 +41,8 @@ python -m storyforge.cli --project demo pipeline-from-script --script path/to/sc
 - `knowledge_capture`
 
 新增能力优先新增 skill，而不是新增 App screen 或 Dart service。
+
+`style_select` 必须在 `script_ingest` 后运行，用于询问并记录电影风格、短剧风格、漫剧风格、动画番剧风格、纪实风格或自定义风格。后续所有创作 prompt 必须遵守 `wiki/style.md` 和 `stages/00_style.json`。
 
 当用户确认某个分镜、动作拆分、提示词或风格值得复用时，优先调用 `knowledge_capture`，把它写入项目级 `wiki/cards/` 或全局 `knowledge/cards/`。只有当知识卡变成稳定流程时，再升级成新的 skill。
 

@@ -32,8 +32,10 @@ projects/<project-id>/
   raw/
     script.md
   wiki/
+    style.md
     cards/
   stages/
+    00_style.json
     01_script.json
     02_assets.json
     03_storyboards.json
@@ -82,6 +84,7 @@ knowledge/
 默认 skill：
 
 - `script_ingest`
+- `style_select`
 - `asset_design`
 - `storyboard_plan`
 - `atomic_shot_plan`
@@ -104,13 +107,13 @@ knowledge/
 默认无媒体生成路径：
 
 ```text
-script_ingest -> asset_design -> storyboard_plan -> atomic_shot_plan -> keyframe_plan
+script_ingest -> style_select -> asset_design -> storyboard_plan -> atomic_shot_plan -> keyframe_plan
 ```
 
 Codex 图片生成路径：
 
 ```text
-script_ingest -> asset_design -> storyboard_plan -> atomic_shot_plan -> keyframe_plan -> Codex image generation -> keyframe_import -> video_generate_ark
+script_ingest -> style_select -> asset_design -> storyboard_plan -> atomic_shot_plan -> keyframe_plan -> Codex image generation -> keyframe_import -> video_generate_ark
 ```
 
 `keyframe_generate_ark` 是备用路径，只在用户明确要求 Ark 自动生成图片时使用。
@@ -138,6 +141,25 @@ Storyforge 的 stage 不应该直接“静默进入下一步”。每个 stage �
 - `review/user_<skill_id>.md`：用户确认材料包。
 
 CLI 批量 pipeline 会为每个 stage 留下这些文件；更严格的人工确认流程应逐个运行 skill，用户确认 `user_<skill_id>.md` 后再运行下一步。
+
+## 风格选择
+
+`style_select` 是剧本之后的强制确认点。没有风格输入时，它会写出风格选择提示并暂停 pipeline；有风格输入时，它会写入：
+
+```text
+stages/00_style.json
+wiki/style.md
+```
+
+内置风格包括：
+
+- `film`
+- `short_drama`
+- `comic_drama`
+- `anime`
+- `documentary`
+
+后续 `asset_design`、`storyboard_plan`、`atomic_shot_plan`、`keyframe_plan`、`keyframe_generate_ark` 和 `video_generate_ark` 都必须通过 `context_pack()` 或显式 style context 遵守该风格。更换风格后应重跑后续创作 stage。
 
 ## 连续性策略
 

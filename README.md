@@ -5,7 +5,7 @@ Storyforge 是一个 **LLM-native 短视频生成工作区**。
 它不再是 Flutter 桌面应用，而是围绕 skill、项目文件和可审阅阶段产物构建。目标是：给定一个剧本，LLM 可以按阶段调用 skill，设计角色/场景视觉锚点，生成分镜、原子镜头、关键帧任务，并通过 Ark Seedance 生成视频片段。
 
 ```text
-script -> assets -> storyboards -> atomic shots -> keyframe plan -> Codex images -> Ark videos
+script -> style -> assets -> storyboards -> atomic shots -> keyframe plan -> Codex images -> Ark videos
 ```
 
 ## 快速开始
@@ -29,6 +29,18 @@ python -m storyforge.cli --project demo pipeline-from-script --script path/to/sc
 ```
 
 这个命令会运行到 `keyframe_plan`，产出给 Codex 生成图片用的首帧/尾帧任务清单，先停在真实图片/视频生成前，方便人工或 LLM 审阅。
+
+如果项目还没有选择风格，命令会先停在 `style_select`，在 `review/user_style_select.md` 里给出风格选项。选好后继续：
+
+```bash
+python -m storyforge.cli --project demo run style_select --input-json "{\"style\":\"film\"}"
+```
+
+也可以在一开始就指定风格：
+
+```bash
+python -m storyforge.cli --project demo pipeline-from-script --script path/to/script.md --style film
+```
 
 当 Codex 生成的图片已经放到计划指定的 `keyframes/` 路径后，继续导入关键帧并生成视频：
 
@@ -58,6 +70,7 @@ projects/<project-id>/
   raw/
   wiki/
   stages/
+    00_style.json
     01_script.json
     02_assets.json
     03_storyboards.json
@@ -112,6 +125,7 @@ python -m storyforge.cli --project demo run storyboard_plan --input-json "{\"ski
 Skill 契约位于 `storyforge_skills/*/SKILL.md`。
 
 - `script_ingest`：接收已有剧本，规范化场景、角色、地点、道具。
+- `style_select`：在剧本进入后立刻询问并记录生产风格。
 - `asset_design`：设计角色、地点、道具的视觉锚点提示词。
 - `storyboard_plan`：生成分镜计划。
 - `atomic_shot_plan`：把分镜拆成物理逻辑更稳定的原子镜头。
@@ -137,6 +151,25 @@ knowledge/cards/                    # 全局可复用知识
 ```
 
 后续 `asset_design`、`storyboard_plan`、`atomic_shot_plan` 会通过 `context_pack()` 自动读取这些知识。也就是说，好的结果可以变成之后生成时的本地经验。
+
+## 风格选择
+
+`style_select` 是剧本之后的强制确认点。内置风格：
+
+- `film`：电影风格
+- `short_drama`：短剧风格
+- `comic_drama`：漫剧风格
+- `anime`：动画番剧风格
+- `documentary`：纪实风格
+
+风格会写入：
+
+```text
+stages/00_style.json
+wiki/style.md
+```
+
+后续所有 asset、storyboard、atomic shot、keyframe prompt 和 video prompt 都会通过 `context_pack()` 读取并遵守这个风格。更换风格后，应重新运行后续创作 stage。
 
 ## 连续性策略
 

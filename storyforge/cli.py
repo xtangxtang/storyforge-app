@@ -26,6 +26,8 @@ def main(argv: list[str] | None = None) -> int:
 
     pipe = sub.add_parser("pipeline-from-script")
     pipe.add_argument("--script", required=True, help="Path to script text/markdown")
+    pipe.add_argument("--style", help="Production style id, for example film, short_drama, comic_drama, anime, documentary")
+    pipe.add_argument("--style-note", default="", help="Optional custom style note")
     pipe.add_argument("--with-media", action="store_true", help="Import existing Codex keyframes and run Ark video generation")
 
     args = parser.parse_args(argv)
@@ -52,16 +54,25 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if result.ok else 1
 
     if args.cmd == "pipeline-from-script":
-        sequence = ["script_ingest", "asset_design", "storyboard_plan", "atomic_shot_plan", "keyframe_plan"]
+        sequence = ["script_ingest", "style_select", "asset_design", "storyboard_plan", "atomic_shot_plan", "keyframe_plan"]
         if args.with_media:
             sequence.extend(["keyframe_import", "video_generate_ark"])
         script_path = Path(args.script)
-        input_data = {"script_path": str(script_path)}
+        script_input = {"script_path": str(script_path)}
+        style_input = {"style": args.style, "style_note": args.style_note} if args.style else {"force_prompt": True}
         for skill_id in sequence:
-            result = runner.run(skill_id, input_data if skill_id == "script_ingest" else {})
+            if skill_id == "script_ingest":
+                current_input = script_input
+            elif skill_id == "style_select":
+                current_input = style_input
+            else:
+                current_input = {}
+            result = runner.run(skill_id, current_input)
             print(json.dumps({"skill": skill_id, "ok": result.ok, "message": result.message, **result.data}, ensure_ascii=False))
             if not result.ok:
                 return 1
+            if result.data.get("awaiting_user_selection"):
+                return 0
         return 0
 
     return 2
