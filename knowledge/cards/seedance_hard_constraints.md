@@ -20,11 +20,12 @@ Ark plan 端点上 Seedance 2.0 / Seedream 5.0-lite 的一组硬限制和已验�
 - 对白镜头加「无字幕 / 无台词文字 / 无水印 logo」约束，避免烧录字幕
 - 需要人物身份锚点时可用带水印的定妆图作参考图（写实无水印人脸更容易被审核挡）
 - 招牌 / 黑板等中文文字只做氛围，不依赖其逐帧稳定可读
+- **i2v 审核只校验输入首帧那一张图、不校验输出视频**：做严格无脸纯背影首帧 → 既过审又锁方向，碰撞 / 转身 / 道歉等有脸画面在输出里照常出现（详见 video_render_mode_hybrid 卡）
 
 ## Avoid
 
 - 时长 < 5 秒
-- 贴镜头正面人脸特写做 i2v 首帧 → InputImageSensitiveContentDetected.PrivacyInformation，改用过肩 / 侧背 / 中远景
+- i2v 输入首帧里出现任何清晰真实人脸（连 3/4 侧脸都挡）→ InputImageSensitiveContentDetected.PrivacyInformation。解法不是退回 t2v，而是把首帧做成严格无脸纯背影（审核只查输入首帧）
 - 指望中文招牌逐帧一致（「茅盾中学」会漂成别的字）
 
 ## Prompt Patterns

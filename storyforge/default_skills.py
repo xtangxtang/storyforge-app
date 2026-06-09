@@ -175,7 +175,7 @@ class StoryboardPlanSkill:
         if not script.get("scenes"):
             return SkillResult(False, "stages/01_script.json 中没有找到 scenes", {})
         data = ctx.llm.chat_json(
-            "你是 Storyforge 的 storyboard_plan。创建严格 JSON：{storyboards:[...]}。每个分镜节拍包含 id, scene_num, shot_num, location, duration(5-8秒，视频单条下限5秒), characters, props, description, first_frame_prompt, video_prompt, continuity。必须保留原故事。复杂物理动作要拆成更小节拍或切镜。方向/进入/相撞类镜头的 first_frame_prompt 用背影或过肩、把运动目的地放在画面纵深来锁方向；对话镜用过肩、避免双正脸。每个节拍和 prompt 都必须遵守 workspace context 中的 Style Profile。所有字段值和说明必须使用简体中文。",
+            "你是 Storyforge 的 storyboard_plan。创建严格 JSON：{storyboards:[...]}。每个分镜节拍包含 id, scene_num, shot_num, location, duration(5-10秒), characters, props, description, first_frame_prompt, video_prompt, continuity。必须保留原故事。动作连续、中间没有断点的段落保持为一个连续节拍、不要拆成需要硬切拼接的多条（如骑行→相撞→道歉合为一条）；只在换时间、换地点、换全新机位的真正断点才切镜。方向/进入/相撞类镜头的 first_frame_prompt 用严格无脸纯背影、把运动目的地放在画面纵深来锁方向。每个节拍和 prompt 都必须遵守 workspace context 中的 Style Profile。所有字段值和说明必须使用简体中文。",
             f"Workspace context:\n{ctx.workspace.context_pack()}\n\nScript JSON:\n{json.dumps(script, ensure_ascii=False)}",
             temperature=float(input_data.get("temperature", 0.25)),
             tag=self.id,
@@ -199,7 +199,13 @@ class AtomicShotPlanSkill:
         if not storyboards:
             return SkillResult(False, "没有找到 storyboards", {})
         data = ctx.llm.chat_json(
-            "你是 Storyforge 的 atomic_shot_plan。输出严格 JSON：{atomic_shots:[...]}。每个原子镜头包含 id, storyboard_id, duration, purpose, first_frame_prompt, last_frame_prompt, video_prompt, continuity_state_start, continuity_state_end, reference_asset_names。每个镜头只承载一个动作意图。duration 按动作复杂度与情绪张力差异化：关键动态镜（碰撞、奔跑、得分、急刹）取 6-8 秒，静态对话/反应镜取 5 秒；单条下限 5 秒，不要低于 5、也不要一律 5 秒。first_frame_prompt 用相机相对语言锁方向：动作/方向镜用背影或过肩、目的地放画面纵深；对话与情绪镜用过肩或侧脸45°、可露出部分面部传递表情，只避免贴镜头的双大正脸，不要一律纯背影丢失情绪。first_frame_prompt 同时补充稳定身份锚点（如校服蓝白拼色、校徽位置、发型轮廓、体型特征），降低纯背影/过肩下人物认错。默认只靠首帧驱动（first-frame-only），last_frame_prompt 只在结尾必须精确发生某接触/到达且首尾构图接近时才写，否则留空。不要依赖中文招牌/黑板文字逐帧稳定。碰撞等困难物理动作优先使用切镜。相邻镜头必须共享连续状态。所有图片/视频 prompt 都必须遵守 workspace context 中的 Style Profile。所有字段值和说明必须使用简体中文。",
+            "你是 Storyforge 的 atomic_shot_plan。输出严格 JSON：{atomic_shots:[...]}。每个镜头包含 id, storyboard_id, render_mode(i2v|t2v), duration, purpose, first_frame_prompt, video_prompt, continuity_state_start, continuity_state_end, reference_asset_names。"
+            "【拆分】动作连续、中间没有断点的相邻动作合并成一条连续镜（如骑行→相撞→道歉合一条），不要拆成多条再硬切；只在换时间/地点/全新机位、或单条超10秒时才另起一镜。不要过度原子化。"
+            "【时长】单条 5-10 秒（下限5上限10），一条连续微场景可用 8-10 秒。"
+            "【render_mode】默认 i2v：能做出『严格无脸纯背影/正后方』首帧的镜（相机正对角色后脑勺与后背、目的地在画面纵深）。i2v 审核只查输入首帧、不查输出，所以无脸首帧既过审又锁方向，碰撞/转身/道歉等有脸画面在输出里照常出现。仅当开局就必须是脸、无法做合理无脸首帧的纯对话/情绪特写才用 t2v。"
+            "【first_frame_prompt】严格无脸纯背影/正后方：相机正对角色后脑勺与后背、完全看不到正脸或侧脸；用相机相对语言锁方向（背对镜头朝画面深处的<目的地>）；补稳定身份锚点（校服拼色、有无眼镜、有无书包、发型/体型）以区分同框角色。"
+            "【video_prompt】i2v 镜写运动与动作；t2v 镜必须自包含因果（主语+动作+场景+因果，不能只写余波）。困难硬接触（相撞/急刹）放在连续镜里、接触靠运动模糊+余波带过；横切来的人从侧巷汇入交汇、不要站路中间被追尾；余波用中近景收（道歉/反应）。所有镜恒含无字幕/无水印约束、不依赖中文招牌逐帧稳定。"
+            "reference_asset_names 列该镜在场角色与地点（地点 canon 优先）。相邻镜共享连续状态。所有 prompt 遵守 Style Profile。所有字段值用简体中文。",
             f"Workspace context:\n{ctx.workspace.context_pack()}\n\nStoryboards:\n{json.dumps(storyboards, ensure_ascii=False)}",
             temperature=0.2,
             tag=self.id,
@@ -237,6 +243,7 @@ class KeyframePlanSkill:
                 "first_frame_prompt": frame_prompt(str(atom.get("first_frame_prompt", "")), named_assets, style_context),
                 "first_frame_local_path": first_path.as_posix(),
                 "frame_mode": "first_last" if raw_last else "first_frame_only",
+                "render_mode": atom.get("render_mode", "i2v"),
                 "reference_asset_names": atom.get("reference_asset_names", []),
                 "status": "needs_codex_image_generation",
             }
@@ -326,6 +333,7 @@ class KeyframeGenerateArkSkill:
             return SkillResult(False, "没有找到关键帧任务，请先运行 keyframe_plan", {})
         # 计划任务可能不带 reference_asset_names，从原子镜补一张映射表。
         ref_names_by_atom = {str(a.get("id")): list(a.get("reference_asset_names") or []) for a in atoms}
+        rmode_by_atom = {str(a.get("id")): str(a.get("render_mode") or "i2v") for a in atoms}
 
         start_index = max(0, int(input_data.get("start_index") or 0))
         limit = max(0, int(input_data.get("limit") or input_data.get("max_items") or 0))
@@ -355,7 +363,9 @@ class KeyframeGenerateArkSkill:
         for task in selected_tasks:
             atom_id = str(task.get("atomic_shot_id"))
             names = task.get("reference_asset_names") or ref_names_by_atom.get(atom_id, [])
+            render_mode = str(task.get("render_mode") or rmode_by_atom.get(atom_id) or "i2v")
             # 首帧参考图 = 该镜地点的 canon 基准图 + 在场角色定妆图（只喂图片生成，不喂视频）。
+            # 无脸背影首帧：i2v 镜直接作首帧（锁方向+过审）；t2v 镜也生成它，作视频生成的方向 reference_image。
             refs = [anchors[n] for n in names if anchors.get(n)]
             if not refs:
                 refs = continuity_reference_urls(task_order, existing, atom_id)
@@ -374,6 +384,8 @@ class KeyframeGenerateArkSkill:
                     "first_frame_local_path": str(first_path),
                     "image_provider": "ark",
                     "frame_mode": "first_frame_only",
+                    "render_mode": render_mode,
+                    "reference_asset_names": list(names),
                     "state": "ready",
                 }
                 continue
@@ -390,6 +402,8 @@ class KeyframeGenerateArkSkill:
                     "first_frame_local_path": str(first_path),
                     "image_provider": "ark",
                     "frame_mode": "first_frame_only",
+                    "render_mode": render_mode,
+                    "reference_asset_names": list(names),
                     "state": "ready",
                 }
             except Exception as exc:
@@ -403,6 +417,8 @@ class KeyframeGenerateArkSkill:
                     "first_frame_local_path": str(first_path),
                     "image_provider": "ark",
                     "frame_mode": "first_frame_only",
+                    "render_mode": render_mode,
+                    "reference_asset_names": list(names),
                     "state": "failed",
                     "error": str(exc),
                 }
@@ -445,6 +461,7 @@ def keyframe_tasks_from_atoms(ctx: SkillContext, atoms: list[dict[str, Any]]) ->
             "first_frame_prompt": frame_prompt(str(atom.get("first_frame_prompt", "")), named_assets, style_context),
             "first_frame_local_path": first_path.as_posix(),
             "frame_mode": "first_last" if raw_last else "first_frame_only",
+            "render_mode": atom.get("render_mode", "i2v"),
             "reference_asset_names": atom.get("reference_asset_names", []),
         }
         if raw_last:
@@ -516,6 +533,25 @@ def normalize_id_filter(value: Any) -> set[str]:
     return set()
 
 
+def t2v_reference_urls(kf: dict[str, Any], asset_context: dict[str, dict[str, Any]]) -> list[str]:
+    """t2v 镜的 reference_image，按优先级截断（cap 3）：无脸背影方向首帧 + 地点 canon + 在场角色定妆图，道具靠后。
+    无脸背影首帧用来给 t2v『带』方向与构图，canon/定妆图维持场景与身份。"""
+    refs: list[str] = []
+    back_view = str(kf.get("first_frame_url") or kf.get("first_frame_local_path") or "").strip()
+    if back_view:
+        refs.append(back_view)
+    names = kf.get("reference_asset_names") or []
+    for want in ("location", "character", "prop"):
+        for n in names:
+            asset = asset_context.get(n) or {}
+            if str(asset.get("type")) != want:
+                continue
+            url = str(asset.get("reference_image_url") or "").strip()
+            if url and url not in refs:
+                refs.append(url)
+    return refs[:3]
+
+
 def continuity_reference_urls(task_order: list[str], existing: dict[str, dict[str, Any]], atom_id: str) -> list[str]:
     """取最近一个已生成成功镜头的首帧作参考图，给后一镜首帧做跨镜连续性。
     只喂给图片生成（首帧→首帧有助一致性），绝不喂给视频生成（参考图会带歪视频方向）。"""
@@ -547,7 +583,7 @@ def ark_image_prompt(prompt: str) -> str:
 
 class VideoGenerateArkSkill:
     id = "video_generate_ark"
-    description = "基于已确认关键帧，通过 Ark Seedance 生成视频片段。"
+    description = "基于已确认关键帧，按 render_mode 分流生成视频：i2v 走无脸背影首帧（锁方向+过审），t2v 走文生视频（无脸背影首帧+canon+定妆图作参考图保方向/场景/身份）。"
 
     def run(self, ctx: SkillContext, input_data: dict[str, Any]) -> SkillResult:
         keyframes = list(ctx.workspace.read_stage("05_keyframes.json").get("keyframes") or [])
@@ -556,20 +592,28 @@ class VideoGenerateArkSkill:
         clips = []
         previous: str | None = None
         # 默认不把前一段视频当参考喂给视频生成：实测参考视频/参考图会把相机拽正、带歪方向，
-        # 还容易触发审核。方向由背影/过肩首帧锁定。仅在用户显式传 chain_reference_video 时才链式参考。
+        # 还容易触发审核。方向由背影首帧锁定。仅在用户显式传 chain_reference_video 时才链式参考。
         chain_reference_video = bool(input_data.get("chain_reference_video"))
         style_context = load_style_context(ctx)
+        asset_context = load_asset_context(ctx)
         for kf in keyframes:
             try:
-                first_frame = str(kf.get("first_frame_url") or kf.get("first_frame_local_path") or "")
-                if not first_frame:
-                    raise ValueError(f"{kf.get('atomic_shot_id')} 缺少首帧")
-                url = ctx.ark.generate_video(
-                    video_prompt_with_style(str(kf.get("video_prompt", "")), style_context),
-                    first_frame,
-                    duration=int(kf.get("duration") or 5),
-                    reference_video_urls=[previous] if (chain_reference_video and previous) else None,
-                )
+                render_mode = str(kf.get("render_mode") or "i2v")
+                prompt = video_prompt_with_style(str(kf.get("video_prompt", "")), style_context)
+                dur = int(kf.get("duration") or 5)
+                if render_mode == "t2v":
+                    # 露脸/对话镜：纯文生视频规避 i2v 真实人脸审核；无脸背影首帧+canon+定妆图作 reference_image 维持方向/场景/身份。
+                    url = ctx.ark.generate_video_t2v(prompt, duration=dur, reference_image_urls=t2v_reference_urls(kf, asset_context))
+                else:
+                    first_frame = str(kf.get("first_frame_url") or kf.get("first_frame_local_path") or "")
+                    if not first_frame:
+                        raise ValueError(f"{kf.get('atomic_shot_id')} 缺少首帧")
+                    url = ctx.ark.generate_video(
+                        prompt,
+                        first_frame,
+                        duration=dur,
+                        reference_video_urls=[previous] if (chain_reference_video and previous) else None,
+                    )
                 previous = url
                 local = ctx.ark.download(url, ctx.workspace.clips_dir / f"{safe_name(str(kf.get('atomic_shot_id')))}.mp4")
                 clips.append({**kf, "state": "ready", "video_url": url, "video_local_path": str(local)})

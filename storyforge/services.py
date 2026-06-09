@@ -134,6 +134,27 @@ class ArkClient:
             raise RuntimeError(f"Ark video submit failed HTTP {response.status_code}: {response.text[:500]}")
         return self._poll_video(response.json()["id"])
 
+    def generate_video_t2v(self, prompt: str, duration: int = 5, reference_image_urls: list[str] | None = None) -> str:
+        """纯文生视频（无首帧输入图，规避 i2v 的真实人脸 PrivacyInformation 审核）。
+        可选传角色定妆图 / 地点 canon 基准图作 reference_image 维持身份与场景一致；不传则为纯 t2v。"""
+        prompt_en = self.llm.translate_visual_prompt(prompt)
+        content: list[dict[str, Any]] = [
+            {"type": "text", "text": f"{prompt_en} --ratio 9:16 --resolution 720p --duration {max(5, min(10, duration))}"},
+        ]
+        for url in (reference_image_urls or [])[:3]:
+            content.append({"type": "image_url", "image_url": {"url": media_ref(url)}, "role": "reference_image"})
+        http = require_requests()
+        response = http.post(
+            f"{self.config.ark_base_url}/contents/generations/tasks",
+            headers=self.headers,
+            data=json.dumps({"model": self.config.ark_video_model, "content": content}),
+            proxies=self.config.proxies,
+            timeout=120,
+        )
+        if response.status_code != 200:
+            raise RuntimeError(f"Ark t2v submit failed HTTP {response.status_code}: {response.text[:500]}")
+        return self._poll_video(response.json()["id"])
+
     def _poll_video(self, task_id: str) -> str:
         http = require_requests()
         deadline = time.time() + 900
