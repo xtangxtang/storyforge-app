@@ -147,7 +147,7 @@ class ConsistencyBibleSkill:
             "palette=全片统一配色与光影基调；"
             "location_layouts={地点原名: 该地点结构与陈设的不变描述，写清黑板/窗/门/课桌排列/招牌等的方位，使该地点在每个镜头都一致}；"
             "recurring_props={复用道具原名: 统一外观}；"
-            "world_rules=必须全片一致的世界规则（如开学清晨人流一律朝校门进、夏季校服短袖）。"
+            "world_rules=必须全片一致的世界规则，要包含人流的真实细节：携带物（如开学一律背双肩书包/拖行李箱）、人流密度与间距（三三两两拉开自然间距、不聚堆不列队）、朝向（如一律朝校门进）、季节着装（夏季短袖）。"
             "只锁定真正跨镜头复用的共享项，描述要具体可画、不要泛泛。所有字段值用简体中文。",
             f"Workspace context:\n{ctx.workspace.context_pack()}\n\nScript JSON:\n{json.dumps(script, ensure_ascii=False)}",
             temperature=float(input_data.get("temperature", 0.2)),
@@ -551,8 +551,8 @@ def anchor_prompt(asset: dict[str, Any], style_context: str = "", uniform: str =
     if asset_type == "location":
         framing = (
             f"{name} 的统一基准空镜（canon base），电影写实风格，竖屏9:16；"
-            "完整交代地点结构与陈设，统一服装的人群背对镜头朝场景纵深方向，"
-            "无主要人物特写、不依赖文字招牌、无海报无拼贴。"
+            "完整交代地点结构与陈设，统一校服的学生三三两两、彼此拉开自然间距地背对镜头朝场景纵深方向"
+            "（自然分散、不拥挤、不聚堆成团、不排队列队），无主要人物特写、不依赖文字招牌、无海报无拼贴。"
         )
     elif asset_type == "character":
         framing = (
