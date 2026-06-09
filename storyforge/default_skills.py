@@ -388,6 +388,7 @@ class KeyframeGenerateArkSkill:
         # 按 selected_tasks 计算，小批量测试只生成用到的锚点；锚点缓存后续批次自动复用。
         needed = {n for t in selected_tasks for n in (t.get("reference_asset_names") or ref_names_by_atom.get(str(t.get("atomic_shot_id")), []))}
         anchors = ensure_asset_anchors(ctx, style_context, only_names=needed)
+        asset_types = {n: str(a.get("type") or "") for n, a in load_asset_context(ctx).items()}
         generated = 0
         skipped = 0
         failed = 0
@@ -402,6 +403,10 @@ class KeyframeGenerateArkSkill:
             refs = [anchors[n] for n in names if anchors.get(n)]
             if not refs:
                 refs = continuity_reference_urls(task_order, existing, atom_id)
+            # 纯建立/环境镜（只引用地点、没有角色）：直接用该地点 canon 当首帧，零漂移、质量有保证，不再重新生成。
+            loc_names = [n for n in names if asset_types.get(n) == "location" and anchors.get(n)]
+            char_names = [n for n in names if asset_types.get(n) == "character"]
+            canon_direct_url = anchors[loc_names[0]] if (loc_names and not char_names) else ""
             first_path = resolve_workspace_path(ctx, task.get("first_frame_local_path")) or ctx.workspace.keyframes_dir / f"{safe_name(atom_id)}_first.png"
             current = dict(existing.get(atom_id) or {})
             # first-frame-only：只生成背影/过肩首帧驱动自然前进运动，不生成尾帧（避免首尾 morph）。
@@ -423,8 +428,12 @@ class KeyframeGenerateArkSkill:
                 }
                 continue
             try:
-                first_url = ctx.ark.generate_image(ark_image_prompt(str(task.get("first_frame_prompt", ""))), refs=refs)
-                ctx.ark.download(first_url, first_path)
+                if canon_direct_url:
+                    first_url = canon_direct_url
+                    ctx.ark.download(first_url, first_path)  # 把该地点 canon 图直接复制为本镜首帧
+                else:
+                    first_url = ctx.ark.generate_image(ark_image_prompt(str(task.get("first_frame_prompt", ""))), refs=refs)
+                    ctx.ark.download(first_url, first_path)
                 generated += 1
                 existing[atom_id] = {
                     "atomic_shot_id": atom_id,
@@ -437,6 +446,7 @@ class KeyframeGenerateArkSkill:
                     "frame_mode": "first_frame_only",
                     "render_mode": render_mode,
                     "reference_asset_names": list(names),
+                    "first_frame_source": "canon" if canon_direct_url else "generated",
                     "state": "ready",
                 }
             except Exception as exc:
