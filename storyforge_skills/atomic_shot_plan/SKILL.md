@@ -28,9 +28,12 @@ review/04_atomic_shots.md
     direction and passes moderation (output may still show faces).
   - `t2v` only when the shot must open on a face (dialogue/emotion close-up); its
     `video_prompt` must then be self-contained.
-- `first_frame_prompt`: strictly faceless back/behind view with the destination in
-  deep background to lock direction; add identity anchors (uniform colors,
-  glasses/backpack, hair/build) to distinguish characters.
+- `first_frame_prompt`: a moderation-safe frame with NO clear real face — pick what
+  fits the shot: a faceless back/behind person, OR a location/establishing frame, OR
+  an object/detail close-up (e.g. the bike's front wheel). Put the destination /
+  motion vector in frame to lock direction (the clip can then tilt up / push in to
+  reveal people); add identity anchors (uniform colors, glasses/backpack, hair/build)
+  when a character is on screen. Faces appear freely in the OUTPUT clip.
 - Hard contact (collision/brake) lives inside a continuous shot — the exact contact
   frame is unattainable, so hide it in motion + aftermath; stage entrants merging
   from a side path (not standing in the road); end on a medium-close aftermath.

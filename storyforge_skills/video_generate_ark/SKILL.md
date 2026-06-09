@@ -20,9 +20,11 @@ review/06_videos.md
 
 - Run only after keyframes are reviewed.
 - Routes by each keyframe's `render_mode`:
-  - `i2v` (default): drive from a strictly faceless back-view first frame — locks
-    direction and passes moderation. Ark's PrivacyInformation check inspects ONLY
-    the input first frame, not the output, so faces appear freely in the output clip.
+  - `i2v` (default): drive from a moderation-safe first frame with no clear real face
+    (faceless person, location/establishing, or object/detail such as the bike's
+    front wheel) — locks direction and passes moderation. Ark's PrivacyInformation
+    check inspects ONLY the input first frame, not the output, so faces appear freely
+    in the output clip.
   - `t2v`: text-to-video for face-forward shots that cannot open on a faceless
     frame. The `video_prompt` must be self-contained (subject + action + scene +
     causation). Direction/scene/identity are held by reference images, prioritized:

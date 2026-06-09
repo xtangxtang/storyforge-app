@@ -175,7 +175,7 @@ class StoryboardPlanSkill:
         if not script.get("scenes"):
             return SkillResult(False, "stages/01_script.json 中没有找到 scenes", {})
         data = ctx.llm.chat_json(
-            "你是 Storyforge 的 storyboard_plan。创建严格 JSON：{storyboards:[...]}。每个分镜节拍包含 id, scene_num, shot_num, location, duration(5-10秒), characters, props, description, first_frame_prompt, video_prompt, continuity。必须保留原故事。动作连续、中间没有断点的段落保持为一个连续节拍、不要拆成需要硬切拼接的多条（如骑行→相撞→道歉合为一条）；只在换时间、换地点、换全新机位的真正断点才切镜。方向/进入/相撞类镜头的 first_frame_prompt 用严格无脸纯背影、把运动目的地放在画面纵深来锁方向。每个节拍和 prompt 都必须遵守 workspace context 中的 Style Profile。所有字段值和说明必须使用简体中文。",
+            "你是 Storyforge 的 storyboard_plan。创建严格 JSON：{storyboards:[...]}。每个分镜节拍包含 id, scene_num, shot_num, location, duration(5-10秒), characters, props, description, first_frame_prompt, video_prompt, continuity。必须保留原故事。动作连续、中间没有断点的段落保持为一个连续节拍、不要拆成需要硬切拼接的多条（如骑行→相撞→道歉合为一条）；只在换时间、换地点、换全新机位的真正断点才切镜。方向/进入/相撞类镜头的 first_frame_prompt 用不含清晰真人脸的画面锁方向（无脸背影人物、或场地空镜、或物件特写如自行车前轮），把运动目的地放在画面纵深。每个节拍和 prompt 都必须遵守 workspace context 中的 Style Profile。所有字段值和说明必须使用简体中文。",
             f"Workspace context:\n{ctx.workspace.context_pack()}\n\nScript JSON:\n{json.dumps(script, ensure_ascii=False)}",
             temperature=float(input_data.get("temperature", 0.25)),
             tag=self.id,
@@ -203,7 +203,7 @@ class AtomicShotPlanSkill:
             "【拆分】动作连续、中间没有断点的相邻动作合并成一条连续镜（如骑行→相撞→道歉合一条），不要拆成多条再硬切；只在换时间/地点/全新机位、或单条超10秒时才另起一镜。不要过度原子化。"
             "【时长】单条 5-10 秒（下限5上限10），一条连续微场景可用 8-10 秒。"
             "【render_mode】默认 i2v：能做出『严格无脸纯背影/正后方』首帧的镜（相机正对角色后脑勺与后背、目的地在画面纵深）。i2v 审核只查输入首帧、不查输出，所以无脸首帧既过审又锁方向，碰撞/转身/道歉等有脸画面在输出里照常出现。仅当开局就必须是脸、无法做合理无脸首帧的纯对话/情绪特写才用 t2v。"
-            "【first_frame_prompt】严格无脸纯背影/正后方：相机正对角色后脑勺与后背、完全看不到正脸或侧脸；用相机相对语言锁方向（背对镜头朝画面深处的<目的地>）；补稳定身份锚点（校服拼色、有无眼镜、有无书包、发型/体型）以区分同框角色。"
+            "【first_frame_prompt】只需『不含清晰真人脸（过审）+ 锁方向』，三选一用最合适的：①无脸背影/过肩人物（相机正对后脑勺与后背）；②纯场地/建立空镜（人群背影、无主要人物特写）；③物件/局部特写（如自行车前轮、道具）。用相机相对语言把目的地/运动矢量放进画面锁方向（视频里再上摇/推进露出人物）；若有角色出镜补身份锚点（校服拼色、有无眼镜/书包、发型体型）区分同框角色。人脸在输出视频里照常出现。"
             "【video_prompt】i2v 镜写运动与动作；t2v 镜必须自包含因果（主语+动作+场景+因果，不能只写余波）。困难硬接触（相撞/急刹）放在连续镜里、接触靠运动模糊+余波带过；横切来的人从侧巷汇入交汇、不要站路中间被追尾；余波用中近景收（道歉/反应）。所有镜恒含无字幕/无水印约束、不依赖中文招牌逐帧稳定。"
             "reference_asset_names 列该镜在场角色与地点（地点 canon 优先）。相邻镜共享连续状态。所有 prompt 遵守 Style Profile。所有字段值用简体中文。",
             f"Workspace context:\n{ctx.workspace.context_pack()}\n\nStoryboards:\n{json.dumps(storyboards, ensure_ascii=False)}",
