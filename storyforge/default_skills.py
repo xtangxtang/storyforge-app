@@ -236,7 +236,7 @@ class AtomicShotPlanSkill:
             "【拆分】动作连续、中间没有断点的相邻动作合并成一条连续镜（如骑行→相撞→道歉合一条），不要拆成多条再硬切；只在换时间/地点/全新机位、或单条超10秒时才另起一镜。不要过度原子化。"
             "【时长】单条 5-10 秒（下限5上限10），一条连续微场景可用 8-10 秒。"
             "【render_mode】默认 i2v：能做出『严格无脸纯背影/正后方』首帧的镜（相机正对角色后脑勺与后背、目的地在画面纵深）。i2v 审核只查输入首帧、不查输出，所以无脸首帧既过审又锁方向，碰撞/转身/道歉等有脸画面在输出里照常出现。仅当开局就必须是脸、无法做合理无脸首帧的纯对话/情绪特写才用 t2v。"
-            "【first_frame_prompt】只需『不含清晰真人脸（过审）+ 锁方向』，三选一用最合适的：①无脸背影/过肩人物（相机正对后脑勺与后背）；②纯场地/建立空镜（人群背影、无主要人物特写）；③物件/局部特写（如自行车前轮、道具）。用相机相对语言把目的地/运动矢量放进画面锁方向（视频里再上摇/推进露出人物）；若有角色出镜补身份锚点（校服拼色、有无眼镜/书包、发型体型）区分同框角色。人脸在输出视频里照常出现。"
+            "【first_frame_prompt】只需『不含清晰真人脸（过审）+ 锁方向』，三选一用最合适的：①无脸背影/过肩人物（相机正对后脑勺与后背）；②纯场地/建立空镜（人群背影、无主要人物特写）；③物件/局部特写（如自行车前轮、道具）。用相机相对语言把目的地/运动矢量放进画面锁方向（视频里再上摇/推进露出人物）；若有角色出镜补身份锚点（校服拼色、有无眼镜/书包、发型体型）区分同框角色。人脸在输出视频里照常出现。同一地点的多个镜头要换不同机位/取景/前景/时刻、避免每镜同一视角（地点结构由 canon 统一，画面要有变化）。"
             "【video_prompt】i2v 镜写运动与动作；t2v 镜必须自包含因果（主语+动作+场景+因果，不能只写余波）。困难硬接触（相撞/急刹）放在连续镜里、接触靠运动模糊+余波带过；横切来的人从侧巷汇入交汇、不要站路中间被追尾；余波用中近景收（道歉/反应）。所有镜恒含无字幕/无水印约束、不依赖中文招牌逐帧稳定。"
             "reference_asset_names 列该镜在场角色与地点（地点 canon 优先）。相邻镜共享连续状态。所有 prompt 遵守 Consistency Bible（统一校服/地点布局/复用道具不得各自发明）与 Style Profile。所有字段值用简体中文。",
             f"Workspace context:\n{ctx.workspace.context_pack()}\n\nStoryboards:\n{json.dumps(storyboards, ensure_ascii=False)}",
@@ -388,7 +388,6 @@ class KeyframeGenerateArkSkill:
         # 按 selected_tasks 计算，小批量测试只生成用到的锚点；锚点缓存后续批次自动复用。
         needed = {n for t in selected_tasks for n in (t.get("reference_asset_names") or ref_names_by_atom.get(str(t.get("atomic_shot_id")), []))}
         anchors = ensure_asset_anchors(ctx, style_context, only_names=needed)
-        asset_types = {n: str(a.get("type") or "") for n, a in load_asset_context(ctx).items()}
         generated = 0
         skipped = 0
         failed = 0
@@ -400,13 +399,11 @@ class KeyframeGenerateArkSkill:
             render_mode = str(task.get("render_mode") or rmode_by_atom.get(atom_id) or "i2v")
             # 首帧参考图 = 该镜地点的 canon 基准图 + 在场角色定妆图（只喂图片生成，不喂视频）。
             # 无脸背影首帧：i2v 镜直接作首帧（锁方向+过审）；t2v 镜也生成它，作视频生成的方向 reference_image。
+            # 每镜各自生成首帧，把该地点 canon + 在场角色定妆图当参考图：canon 统一地点结构，
+            # 每镜不同的 first_frame_prompt（机位/取景/前景/时刻）提供变化。不直接复用 canon，避免每镜一模一样。
             refs = [anchors[n] for n in names if anchors.get(n)]
             if not refs:
                 refs = continuity_reference_urls(task_order, existing, atom_id)
-            # 纯建立/环境镜（只引用地点、没有角色）：直接用该地点 canon 当首帧，零漂移、质量有保证，不再重新生成。
-            loc_names = [n for n in names if asset_types.get(n) == "location" and anchors.get(n)]
-            char_names = [n for n in names if asset_types.get(n) == "character"]
-            canon_direct_url = anchors[loc_names[0]] if (loc_names and not char_names) else ""
             first_path = resolve_workspace_path(ctx, task.get("first_frame_local_path")) or ctx.workspace.keyframes_dir / f"{safe_name(atom_id)}_first.png"
             current = dict(existing.get(atom_id) or {})
             # first-frame-only：只生成背影/过肩首帧驱动自然前进运动，不生成尾帧（避免首尾 morph）。
@@ -428,12 +425,8 @@ class KeyframeGenerateArkSkill:
                 }
                 continue
             try:
-                if canon_direct_url:
-                    first_url = canon_direct_url
-                    ctx.ark.download(first_url, first_path)  # 把该地点 canon 图直接复制为本镜首帧
-                else:
-                    first_url = ctx.ark.generate_image(ark_image_prompt(str(task.get("first_frame_prompt", ""))), refs=refs)
-                    ctx.ark.download(first_url, first_path)
+                first_url = ctx.ark.generate_image(ark_image_prompt(str(task.get("first_frame_prompt", ""))), refs=refs)
+                ctx.ark.download(first_url, first_path)
                 generated += 1
                 existing[atom_id] = {
                     "atomic_shot_id": atom_id,
@@ -446,7 +439,6 @@ class KeyframeGenerateArkSkill:
                     "frame_mode": "first_frame_only",
                     "render_mode": render_mode,
                     "reference_asset_names": list(names),
-                    "first_frame_source": "canon" if canon_direct_url else "generated",
                     "state": "ready",
                 }
             except Exception as exc:
