@@ -32,6 +32,7 @@ python -m storyforge.cli --project demo pipeline-from-script --script path/to/sc
 - `script_ingest`
 - `document_ingest`
 - `style_select`
+- `consistency_bible`
 - `asset_design`
 - `storyboard_plan`
 - `atomic_shot_plan`
@@ -44,6 +45,8 @@ python -m storyforge.cli --project demo pipeline-from-script --script path/to/sc
 新增能力优先新增 skill，而不是新增 App screen 或 Dart service。
 
 `style_select` 必须在 `script_ingest` 后运行，用于询问并记录电影风格、短剧风格、漫剧风格、动画番剧风格、纪实风格或自定义风格。后续所有创作 prompt 必须遵守 `wiki/style.md` 和 `stages/00_style.json`。
+
+`consistency_bible` 在 `style_select` 之后、`asset_design` 之前运行，先抽取并锁定跨镜头共享元素（统一校服、配色、各地点固定布局、复用道具、世界规则），写入 `wiki/consistency.md` 和 `stages/00b_consistency.json`。后续 `asset_design`、canon 基准图/定妆图、分镜、原子镜、首帧都必须引用它，不得各自发明，否则校服/布局/道具会跨镜头漂移。
 
 通过 `pipeline-from-document` 提交 `.txt`、`.md`、`.docx`、`.pdf` 时，如果没有显式传 `--project`，系统应从文档标题/内容自动派生项目 ID，并在独立 `projects/<project-id>/` 目录中运行。
 

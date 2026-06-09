@@ -131,6 +131,39 @@ class StyleSelectSkill:
         return SkillResult(True, "风格已选择", {"file": "stages/00_style.json", "style": profile.get("id")})
 
 
+class ConsistencyBibleSkill:
+    id = "consistency_bible"
+    description = "在视觉设计前先抽取并锁定跨镜头共享元素（统一校服、配色、地点布局、复用道具、世界规则），供后续所有阶段引用以保持统一。"
+
+    def run(self, ctx: SkillContext, input_data: dict[str, Any]) -> SkillResult:
+        script = ctx.workspace.read_stage("01_script.json")
+        if not script.get("assets") and not script.get("scenes"):
+            return SkillResult(False, "未找到 stages/01_script.json 中的剧本结构化结果", {})
+        data = ctx.llm.chat_json(
+            "你是 Storyforge 的 consistency_bible。在所有视觉设计之前，先从剧本里抽取并锁定【跨镜头必须统一】的共享元素，输出严格 JSON："
+            "{uniform, fixed_outfits, palette, location_layouts, recurring_props, world_rules}。"
+            "uniform=全片统一校服的精确描述（颜色与拼色、领口、版型、下装、鞋）；"
+            "fixed_outfits={角色原名: 非校服时的固定着装}；"
+            "palette=全片统一配色与光影基调；"
+            "location_layouts={地点原名: 该地点结构与陈设的不变描述，写清黑板/窗/门/课桌排列/招牌等的方位，使该地点在每个镜头都一致}；"
+            "recurring_props={复用道具原名: 统一外观}；"
+            "world_rules=必须全片一致的世界规则（如开学清晨人流一律朝校门进、夏季校服短袖）。"
+            "只锁定真正跨镜头复用的共享项，描述要具体可画、不要泛泛。所有字段值用简体中文。",
+            f"Workspace context:\n{ctx.workspace.context_pack()}\n\nScript JSON:\n{json.dumps(script, ensure_ascii=False)}",
+            temperature=float(input_data.get("temperature", 0.2)),
+            tag=self.id,
+        )
+        data.setdefault("source", self.id)
+        ctx.workspace.write_stage("00b_consistency.json", data)
+        ctx.workspace.wiki_dir.joinpath("consistency.md").write_text(format_consistency_markdown(data), encoding="utf-8")
+        write_review_markdown(ctx.workspace.review_dir / "00b_consistency.md", "共享元素清单审阅", data)
+        ctx.workspace.append_log("共享元素清单已抽取", {
+            "locations": len(data.get("location_layouts") or {}),
+            "props": len(data.get("recurring_props") or {}),
+        })
+        return SkillResult(True, "共享元素清单已抽取", {"file": "stages/00b_consistency.json"})
+
+
 class AssetDesignSkill:
     id = "asset_design"
     description = "为角色、地点和道具设计稳定的视觉锚点与可复用图片提示词。"
@@ -141,7 +174,7 @@ class AssetDesignSkill:
         if not assets:
             return SkillResult(False, "stages/01_script.json 中没有找到 assets", {})
         data = ctx.llm.chat_json(
-            "你是 Storyforge 的 asset_design。输出严格 JSON：{assets:[...]}。对每个 asset 保留 type/name/description，并补充 visual_anchor_prompt、negative_prompt、consistency_notes。提示词必须足够具体，便于图片生成；不要海报感、拼贴感或设定集排版；必须保持身份、服装、地点细节在后续镜头中稳定。必须遵守 workspace context 中的 Style Profile。所有字段值和说明必须使用简体中文。",
+            "你是 Storyforge 的 asset_design。输出严格 JSON：{assets:[...]}。对每个 asset 保留 type/name/description，并补充 visual_anchor_prompt、negative_prompt、consistency_notes。提示词必须足够具体，便于图片生成；不要海报感、拼贴感或设定集排版；必须保持身份、服装、地点细节在后续镜头中稳定。必须遵守 workspace context 中的 Consistency Bible（consistency.md）：每个 character 的 visual_anchor_prompt 一律穿统一校服（除非 bible 的 fixed_outfits 另有规定），每个 location 一律采用 bible 里该地点的固定布局与方位，复用道具用 bible 的统一外观，绝不各自发明。同时遵守 Style Profile。所有字段值和说明必须使用简体中文。",
             f"Workspace context:\n{ctx.workspace.context_pack()}\n\nAssets:\n{json.dumps(assets, ensure_ascii=False)}",
             temperature=float(input_data.get("temperature", 0.2)),
             tag=self.id,
@@ -175,7 +208,7 @@ class StoryboardPlanSkill:
         if not script.get("scenes"):
             return SkillResult(False, "stages/01_script.json 中没有找到 scenes", {})
         data = ctx.llm.chat_json(
-            "你是 Storyforge 的 storyboard_plan。创建严格 JSON：{storyboards:[...]}。每个分镜节拍包含 id, scene_num, shot_num, location, duration(5-10秒), characters, props, description, first_frame_prompt, video_prompt, continuity。必须保留原故事。动作连续、中间没有断点的段落保持为一个连续节拍、不要拆成需要硬切拼接的多条（如骑行→相撞→道歉合为一条）；只在换时间、换地点、换全新机位的真正断点才切镜。方向/进入/相撞类镜头的 first_frame_prompt 用不含清晰真人脸的画面锁方向（无脸背影人物、或场地空镜、或物件特写如自行车前轮），把运动目的地放在画面纵深。每个节拍和 prompt 都必须遵守 workspace context 中的 Style Profile。所有字段值和说明必须使用简体中文。",
+            "你是 Storyforge 的 storyboard_plan。创建严格 JSON：{storyboards:[...]}。每个分镜节拍包含 id, scene_num, shot_num, location, duration(5-10秒), characters, props, description, first_frame_prompt, video_prompt, continuity。必须保留原故事。动作连续、中间没有断点的段落保持为一个连续节拍、不要拆成需要硬切拼接的多条（如骑行→相撞→道歉合为一条）；只在换时间、换地点、换全新机位的真正断点才切镜。方向/进入/相撞类镜头的 first_frame_prompt 用不含清晰真人脸的画面锁方向（无脸背影人物、或场地空镜、或物件特写如自行车前轮），把运动目的地放在画面纵深。每个节拍和 prompt 都必须遵守 workspace context 中的 Consistency Bible（统一校服/地点布局/复用道具）与 Style Profile。所有字段值和说明必须使用简体中文。",
             f"Workspace context:\n{ctx.workspace.context_pack()}\n\nScript JSON:\n{json.dumps(script, ensure_ascii=False)}",
             temperature=float(input_data.get("temperature", 0.25)),
             tag=self.id,
@@ -205,7 +238,7 @@ class AtomicShotPlanSkill:
             "【render_mode】默认 i2v：能做出『严格无脸纯背影/正后方』首帧的镜（相机正对角色后脑勺与后背、目的地在画面纵深）。i2v 审核只查输入首帧、不查输出，所以无脸首帧既过审又锁方向，碰撞/转身/道歉等有脸画面在输出里照常出现。仅当开局就必须是脸、无法做合理无脸首帧的纯对话/情绪特写才用 t2v。"
             "【first_frame_prompt】只需『不含清晰真人脸（过审）+ 锁方向』，三选一用最合适的：①无脸背影/过肩人物（相机正对后脑勺与后背）；②纯场地/建立空镜（人群背影、无主要人物特写）；③物件/局部特写（如自行车前轮、道具）。用相机相对语言把目的地/运动矢量放进画面锁方向（视频里再上摇/推进露出人物）；若有角色出镜补身份锚点（校服拼色、有无眼镜/书包、发型体型）区分同框角色。人脸在输出视频里照常出现。"
             "【video_prompt】i2v 镜写运动与动作；t2v 镜必须自包含因果（主语+动作+场景+因果，不能只写余波）。困难硬接触（相撞/急刹）放在连续镜里、接触靠运动模糊+余波带过；横切来的人从侧巷汇入交汇、不要站路中间被追尾；余波用中近景收（道歉/反应）。所有镜恒含无字幕/无水印约束、不依赖中文招牌逐帧稳定。"
-            "reference_asset_names 列该镜在场角色与地点（地点 canon 优先）。相邻镜共享连续状态。所有 prompt 遵守 Style Profile。所有字段值用简体中文。",
+            "reference_asset_names 列该镜在场角色与地点（地点 canon 优先）。相邻镜共享连续状态。所有 prompt 遵守 Consistency Bible（统一校服/地点布局/复用道具不得各自发明）与 Style Profile。所有字段值用简体中文。",
             f"Workspace context:\n{ctx.workspace.context_pack()}\n\nStoryboards:\n{json.dumps(storyboards, ensure_ascii=False)}",
             temperature=0.2,
             tag=self.id,
@@ -478,6 +511,10 @@ def ensure_asset_anchors(ctx: SkillContext, style_context: str = "", only_names:
     已有 reference_image_url 的跳过，便于断点续跑复用。返回 name -> url。"""
     stage = ctx.workspace.read_stage("02_assets.json")
     assets = list(stage.get("assets") or [])
+    # Consistency Bible：统一校服 + 各地点固定布局，烘进每张锚点图，保证跨镜头统一。
+    bible = ctx.workspace.read_stage("00b_consistency.json")
+    uniform = str(bible.get("uniform") or "")
+    layouts = bible.get("location_layouts") or {}
     anchors: dict[str, str] = {}
     changed = False
     for asset in assets:
@@ -489,7 +526,7 @@ def ensure_asset_anchors(ctx: SkillContext, style_context: str = "", only_names:
         if asset.get("reference_image_url"):
             anchors[name] = str(asset["reference_image_url"])
             continue
-        url = ctx.ark.generate_image(anchor_prompt(asset, style_context))
+        url = ctx.ark.generate_image(anchor_prompt(asset, style_context, uniform=uniform, layout=str(layouts.get(name) or "")))
         path = ctx.ark.download(url, ctx.workspace.assets_dir / f"{safe_name(name)}.png")
         asset["reference_image_url"] = url
         asset["reference_image_local_path"] = str(path)
@@ -500,11 +537,17 @@ def ensure_asset_anchors(ctx: SkillContext, style_context: str = "", only_names:
     return anchors
 
 
-def anchor_prompt(asset: dict[str, Any], style_context: str = "") -> str:
+def anchor_prompt(asset: dict[str, Any], style_context: str = "", uniform: str = "", layout: str = "") -> str:
     asset_type = str(asset.get("type", "asset")).strip()
     name = str(asset.get("name", "")).strip()
     visual = str(asset.get("visual_anchor_prompt") or asset.get("description") or "").strip()
     style_line = f"风格摘要：{compact_style_summary(style_context)}\n" if style_context else ""
+    consistency = ""
+    if asset_type == "location" and layout:
+        consistency += f"该地点固定布局（必须与全片一致）：{layout}\n"
+    if uniform and asset_type in ("location", "character"):
+        consistency += f"统一校服（画面中学生一律遵守）：{uniform}\n"
+    style_line += consistency
     if asset_type == "location":
         framing = (
             f"{name} 的统一基准空镜（canon base），电影写实风格，竖屏9:16；"
@@ -697,6 +740,7 @@ def default_registry() -> SkillRegistry:
         DocumentIngestSkill(),
         ScriptIngestSkill(),
         StyleSelectSkill(),
+        ConsistencyBibleSkill(),
         AssetDesignSkill(),
         StoryboardPlanSkill(),
         AtomicShotPlanSkill(),
@@ -832,6 +876,41 @@ def style_options() -> list[dict[str, Any]]:
             "avoid": ["过度戏剧化", "漫画夸张", "不可信的物理动作"],
         },
     ]
+
+
+def format_consistency_markdown(bible: dict[str, Any]) -> str:
+    def kv(value: Any) -> str:
+        if isinstance(value, dict):
+            return "\n".join(f"- {k}：{v}" for k, v in value.items())
+        return bullet_lines(value)
+    return "\n".join([
+        "# Consistency Bible（跨镜头共享元素，所有视觉阶段必须遵守，不得各自发明）",
+        "",
+        "## 统一校服",
+        "",
+        str(bible.get("uniform", "")).strip(),
+        "",
+        "## 固定着装（非校服）",
+        "",
+        kv(bible.get("fixed_outfits")),
+        "",
+        "## 配色与光影基调",
+        "",
+        str(bible.get("palette", "")).strip(),
+        "",
+        "## 地点布局（每个地点跨镜头不变）",
+        "",
+        kv(bible.get("location_layouts")),
+        "",
+        "## 复用道具统一外观",
+        "",
+        kv(bible.get("recurring_props")),
+        "",
+        "## 世界规则",
+        "",
+        bullet_lines(bible.get("world_rules")),
+        "",
+    ])
 
 
 def format_style_markdown(profile: dict[str, Any]) -> str:

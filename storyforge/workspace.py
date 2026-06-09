@@ -158,9 +158,11 @@ class ProjectWorkspace:
         for path in [
             self.raw_dir / "script.md",
             self.wiki_dir / "style.md",
+            self.wiki_dir / "consistency.md",
             self.wiki_dir / "knowledge.md",
             self.wiki_dir / "continuity.md",
             self.stage_path("00_style.json"),
+            self.stage_path("00b_consistency.json"),
             self.stage_path("01_script.json"),
             self.stage_path("02_assets.json"),
             self.stage_path("03_storyboards.json"),

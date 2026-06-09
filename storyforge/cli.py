@@ -70,7 +70,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if result.ok else 1
 
     if args.cmd == "pipeline-from-script":
-        sequence = ["script_ingest", "style_select", "asset_design", "storyboard_plan", "atomic_shot_plan", "keyframe_plan"]
+        sequence = ["script_ingest", "style_select", "consistency_bible", "asset_design", "storyboard_plan", "atomic_shot_plan", "keyframe_plan"]
         if args.with_media:
             sequence.extend(["keyframe_import", "video_generate_ark"])
         script_path = Path(args.script)
@@ -98,7 +98,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.cmd == "pipeline-from-document":
-        sequence = ["document_ingest", "script_ingest", "style_select", "asset_design", "storyboard_plan", "atomic_shot_plan", "keyframe_plan"]
+        sequence = ["document_ingest", "script_ingest", "style_select", "consistency_bible", "asset_design", "storyboard_plan", "atomic_shot_plan", "keyframe_plan"]
         if args.with_media:
             sequence.extend(["keyframe_import", "video_generate_ark"])
         document_input = {"document_path": str(Path(args.document))}
