@@ -27,6 +27,7 @@ Ark plan 端点上 Seedance 2.0 / Seedream 5.0-lite 的一组硬限制和已验�
 - 时长 < 5 秒
 - i2v 输入首帧里出现任何清晰真实人脸（连 3/4 侧脸都挡）→ InputImageSensitiveContentDetected.PrivacyInformation。解法不是退回 t2v，而是把首帧做成不含真人脸的画面（无脸背影人物、场地空镜、或物件特写——审核只查输入首帧）
 - 指望中文招牌逐帧一致（「茅盾中学」会漂成别的字）
+- 给物件特写 / 空镜首帧塞入没在该帧出现的角色描述 → 可能触发 InputTextSensitiveContentDetected（文本审核）；首帧的参考资产只列该帧真出现的东西（地点 + 可见物件/角色）
 
 ## Prompt Patterns
 

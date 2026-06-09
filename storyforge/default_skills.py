@@ -238,7 +238,7 @@ class AtomicShotPlanSkill:
             "【render_mode】默认 i2v：能做出『严格无脸纯背影/正后方』首帧的镜（相机正对角色后脑勺与后背、目的地在画面纵深）。i2v 审核只查输入首帧、不查输出，所以无脸首帧既过审又锁方向，碰撞/转身/道歉等有脸画面在输出里照常出现。仅当开局就必须是脸、无法做合理无脸首帧的纯对话/情绪特写才用 t2v。"
             "【first_frame_prompt】只需『不含清晰真人脸（过审）+ 锁方向』，三选一用最合适的：①无脸背影/过肩人物（相机正对后脑勺与后背）；②纯场地/建立空镜（人群背影、无主要人物特写）；③物件/局部特写（如自行车前轮、道具）。用相机相对语言把目的地/运动矢量放进画面锁方向（视频里再上摇/推进露出人物）；若有角色出镜补身份锚点（校服拼色、有无眼镜/书包、发型体型）区分同框角色。人脸在输出视频里照常出现。同一地点的多个镜头要换不同机位/取景/前景/时刻、避免每镜同一视角（地点结构由 canon 统一，画面要有变化）。"
             "【video_prompt】i2v 镜写运动与动作；t2v 镜必须自包含因果（主语+动作+场景+因果，不能只写余波）。困难硬接触（相撞/急刹）放在连续镜里、接触靠运动模糊+余波带过；横切来的人从侧巷汇入交汇、不要站路中间被追尾；余波用中近景收（道歉/反应）。所有镜恒含无字幕/无水印约束、不依赖中文招牌逐帧稳定。"
-            "reference_asset_names 列该镜在场角色与地点（地点 canon 优先）。相邻镜共享连续状态。所有 prompt 遵守 Consistency Bible（统一校服/地点布局/复用道具不得各自发明）与 Style Profile。所有字段值用简体中文。",
+            "reference_asset_names 只列该镜【首帧画面里真出现】的资产（地点 canon 优先 + 首帧里可见的物件/角色）；物件特写或纯空镜首帧不要列没出场的角色，否则无关人物描述会触发文本审核 InputTextSensitiveContentDetected。相邻镜共享连续状态。所有 prompt 遵守 Consistency Bible（统一校服/地点布局/复用道具不得各自发明）与 Style Profile。所有字段值用简体中文。",
             f"Workspace context:\n{ctx.workspace.context_pack()}\n\nStoryboards:\n{json.dumps(storyboards, ensure_ascii=False)}",
             temperature=0.2,
             tag=self.id,
