@@ -22,6 +22,8 @@ Ark 视频生成曾在「锁方向(i2v)」和「露脸过审(t2v)」之间被迫
 - 想让 t2v 方向对：先生成一张无脸背影首帧，作 reference_image 喂给 t2v（带方向与构图，同时保 t2v 自然运动）
 - reference_image 按优先级截断（cap 3）：地点 canon / 背影方向首帧 + 在场角色定妆图优先，道具靠后
 - **i2v 镜的人物身份/校服只由首帧决定（i2v 视频本身不吃参考图）**：要锁校服/长相，就在【首帧图片生成】时把该角色定妆图当 reference_image 喂进去（本地图 base64 喂 refs 可避开过期 URL；首帧用简短自写提示词、不要堆角色长描述，避开 InputTextSensitiveContentDetected 文本审核）。纯物件/无人物首帧 → i2v 会自己乱编衣服。露脸镜要过审又要锁校服：让定妆图里的角色在首帧被前景物件（如大前轮、车筐）遮住脸即可
+- **API 硬限制（2026-06-10 实测，doubao-seedance-2.0 plan 端点）**：`first_frame` 与 `reference_image`/`reference_video` **互斥**，同一请求混用必 400 `InvalidParameter: first/last frame content cannot be mixed with reference media content`。所以 i2v 镜中段才出现的人物/地点（不在首帧里）没法靠参考媒体锁——只能：①把该人物/地点的完整外观写死在 video_prompt 文字里；②或放弃首帧、改走 reference 模式（无 first_frame，用无脸首帧图+定妆图+canon 当 reference_image 带方向与一致性）
+- **参考媒体格式限制（同日实测）**：`reference_image` 接受 base64 data URI（本地图直接内联，永不过期）；`reference_video` **只接受 web URL**（base64/本地路径被 400 拒：`reference_video must be provided as a web url`）——要把前镜成片当参考视频，必须在渲染后 24h 内用其 TOS `video_url`（渲染时持久化到 06_videos.json）。实战范例：AS004 校门/俞墨凡漂移 → 改 reference 模式、refs=[本镜无脸首帧图, 校门canon, 俞墨凡定妆图] 一次成片且一致
 
 ## Avoid
 

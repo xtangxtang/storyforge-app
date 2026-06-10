@@ -113,7 +113,14 @@ class ArkClient:
             raise RuntimeError(f"Ark image failed HTTP {response.status_code}: {response.text[:500]}")
         return response.json()["data"][0]["url"]
 
-    def generate_video(self, prompt: str, first_frame_url: str, duration: int = 5, reference_video_urls: list[str] | None = None) -> str:
+    def generate_video(
+        self,
+        prompt: str,
+        first_frame_url: str,
+        duration: int = 5,
+        reference_video_urls: list[str] | None = None,
+        reference_image_urls: list[str] | None = None,
+    ) -> str:
         prompt_en = self.llm.translate_visual_prompt(prompt)
         first_frame_ref = media_ref(first_frame_url)
         content: list[dict[str, Any]] = [
@@ -121,7 +128,9 @@ class ArkClient:
             {"type": "image_url", "image_url": {"url": first_frame_ref}, "role": "first_frame"},
         ]
         for url in (reference_video_urls or [])[:3]:
-            content.append({"type": "video_url", "video_url": {"url": url}, "role": "reference_video"})
+            content.append({"type": "video_url", "video_url": {"url": video_url_ref(url)}, "role": "reference_video"})
+        for url in (reference_image_urls or [])[:3]:
+            content.append({"type": "image_url", "image_url": {"url": media_ref(url)}, "role": "reference_image"})
         http = require_requests()
         response = http.post(
             f"{self.config.ark_base_url}/contents/generations/tasks",
@@ -134,15 +143,24 @@ class ArkClient:
             raise RuntimeError(f"Ark video submit failed HTTP {response.status_code}: {response.text[:500]}")
         return self._poll_video(response.json()["id"])
 
-    def generate_video_t2v(self, prompt: str, duration: int = 5, reference_image_urls: list[str] | None = None) -> str:
+    def generate_video_t2v(
+        self,
+        prompt: str,
+        duration: int = 5,
+        reference_image_urls: list[str] | None = None,
+        reference_video_urls: list[str] | None = None,
+    ) -> str:
         """纯文生视频（无首帧输入图，规避 i2v 的真实人脸 PrivacyInformation 审核）。
-        可选传角色定妆图 / 地点 canon 基准图作 reference_image 维持身份与场景一致；不传则为纯 t2v。"""
+        可选传角色定妆图 / 地点 canon 基准图作 reference_image、前镜成片作 reference_video 维持身份/场景/动线一致。
+        注意：Ark 限制 first_frame 与 reference 媒体互斥，所以参考媒体只能走本方法（无首帧），不能走 generate_video。"""
         prompt_en = self.llm.translate_visual_prompt(prompt)
         content: list[dict[str, Any]] = [
             {"type": "text", "text": f"{prompt_en} --ratio 9:16 --resolution 720p --duration {max(5, min(10, duration))}"},
         ]
         for url in (reference_image_urls or [])[:3]:
             content.append({"type": "image_url", "image_url": {"url": media_ref(url)}, "role": "reference_image"})
+        for url in (reference_video_urls or [])[:3]:
+            content.append({"type": "video_url", "video_url": {"url": video_url_ref(url)}, "role": "reference_video"})
         http = require_requests()
         response = http.post(
             f"{self.config.ark_base_url}/contents/generations/tasks",
@@ -217,3 +235,12 @@ def media_ref(value: str) -> str:
     mime_type = mimetypes.guess_type(path.name)[0] or "image/png"
     encoded = base64.b64encode(path.read_bytes()).decode("ascii")
     return f"data:{mime_type};base64,{encoded}"
+
+
+def video_url_ref(value: str) -> str:
+    """Ark 的 reference_video 只接受可访问的 web URL（base64/本地路径会被 400 拒：
+    "reference_video must be provided as a web url"）。要复用前镜成片，需在渲染后 24h 内
+    使用其 TOS video_url（持久化在 stages/06_videos.json）。"""
+    if value.startswith(("http://", "https://")):
+        return value
+    raise ValueError(f"reference_video 必须是 web URL（Ark 不接受本地文件/base64）：{value[:120]}")

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
 from .document import extract_document_text
+from .services import media_ref
 from .skills import SkillContext, SkillRegistry, SkillResult, write_review_markdown
 
 # 对白/动作镜头恒加的整洁画面约束，避免 Seedance 烧录字幕、台词文字或水印 logo。
@@ -234,7 +236,8 @@ class AtomicShotPlanSkill:
         data = ctx.llm.chat_json(
             "你是 Storyforge 的 atomic_shot_plan。输出严格 JSON：{atomic_shots:[...]}。每个镜头包含 id, storyboard_id, render_mode(i2v|t2v), duration, purpose, first_frame_prompt, video_prompt, continuity_state_start, continuity_state_end, reference_asset_names。"
             "【拆分】动作连续、中间没有断点的相邻动作合并成一条连续镜（如骑行→相撞→道歉合一条），不要拆成多条再硬切；只在换时间/地点/全新机位、或单条超10秒时才另起一镜。不要过度原子化。"
-            "【时长】单条 5-10 秒（下限5上限10），一条连续微场景可用 8-10 秒。"
+            "【时长】单条 5-10 秒（下限5上限10），一条连续微场景可用 8-10 秒。video_prompt 的动作节拍数必须与 duration 匹配（约每拍1.5-2秒）：节拍装不下就加时长或拆镜，节拍太少则补环境/反应细节。"
+            "【中段新出现的人物/地点】Ark 限制 first_frame 与 reference 媒体互斥，i2v 镜里中段才出现、不在首帧画面中的人物/地点没有任何参考图可锁，必须在 video_prompt 文字里写全其外观锚点（校服拼色/发型/眼镜耳机书包等配件/建筑材质结构），否则必然漂移。"
             "【render_mode】默认 i2v：能做出『严格无脸纯背影/正后方』首帧的镜（相机正对角色后脑勺与后背、目的地在画面纵深）。i2v 审核只查输入首帧、不查输出，所以无脸首帧既过审又锁方向，碰撞/转身/道歉等有脸画面在输出里照常出现。仅当开局就必须是脸、无法做合理无脸首帧的纯对话/情绪特写才用 t2v。"
             "【first_frame_prompt】只需『不含清晰真人脸（过审）+ 锁方向』，三选一用最合适的：①无脸背影/过肩人物（相机正对后脑勺与后背）；②纯场地/建立空镜（人群背影、无主要人物特写）；③物件/局部特写（如自行车前轮、道具）。用相机相对语言把目的地/运动矢量放进画面锁方向（视频里再上摇/推进露出人物）；若有角色出镜补身份锚点（校服拼色、有无眼镜/书包、发型体型）区分同框角色。人脸在输出视频里照常出现。同一地点的多个镜头要换不同机位/取景/前景/时刻、避免每镜同一视角（地点结构由 canon 统一，画面要有变化）。"
             "【video_prompt】i2v 镜写运动与动作；t2v 镜必须自包含因果（主语+动作+场景+因果，不能只写余波）。困难硬接触（相撞/急刹）放在连续镜里、接触靠运动模糊+余波带过；横切来的人从侧巷汇入交汇、不要站路中间被追尾；余波用中近景收（道歉/反应）。所有镜恒含无字幕/无水印约束、不依赖中文招牌逐帧稳定。"
@@ -280,6 +283,7 @@ class KeyframePlanSkill:
                 "reference_asset_names": atom.get("reference_asset_names", []),
                 "status": "needs_codex_image_generation",
             }
+            task["prompt_chars"] = len(str(task["first_frame_prompt"]))
             # 仅当原子镜确有尾帧指令（困难接触/到达镜）才规划尾帧任务，避免生成无意义的纯模板尾帧。
             if raw_last:
                 last_path = Path("keyframes") / f"{safe_name(atom_id)}_last.png"
@@ -292,7 +296,9 @@ class KeyframePlanSkill:
             "prompt_contract": {
                 "style_reference": "wiki/style.md",
                 "asset_reference": "stages/02_assets.json",
-                "prompt_budget_chars": 800,
+                # 超过 800 时 frame_prompt 自动换精简锚点版；2000 是含风格摘要/锚点行的实际硬上限。
+                "prompt_budget_chars": 2000,
+                "compact_threshold_chars": 800,
                 "frame_policy": "默认 first-frame-only 锁方向；仅困难接触/到达镜才规划 last_frame 任务。",
                 "rule": "每条首帧 prompt 只保留镜头画面、核心动作、物理/方向/光影约束；完整风格和资产锚点由全局引用提供。",
             },
@@ -459,11 +465,17 @@ class KeyframeGenerateArkSkill:
                 }
 
         keyframes = [existing[str(task.get("atomic_shot_id"))] for task in tasks if str(task.get("atomic_shot_id")) in existing]
+        # anchors 值可能是 base64 data URI（本地锚点图），写进 stage 文档前换成可读的本地路径/URL。
+        asset_rows = {str(a.get("name") or ""): a for a in ctx.workspace.read_stage("02_assets.json").get("assets") or []}
+        anchors_doc = {
+            n: str((asset_rows.get(n) or {}).get("reference_image_local_path") or (asset_rows.get(n) or {}).get("reference_image_url") or "")
+            for n in anchors
+        }
         out = {
             "source": self.id,
             "image_provider": "ark",
             "mode": "first_frame_only",
-            "anchors": anchors,
+            "anchors": anchors_doc,
             "keyframes": keyframes,
             "success": sum(item.get("state") == "ready" for item in keyframes),
             "failed": sum(item.get("state") == "failed" for item in keyframes),
@@ -510,7 +522,8 @@ def keyframe_tasks_from_atoms(ctx: SkillContext, atoms: list[dict[str, Any]]) ->
 def ensure_asset_anchors(ctx: SkillContext, style_context: str = "", only_names: set[str] | None = None) -> dict[str, str]:
     """为每个 asset 生成一张稳定锚点图并缓存进 stages/02_assets.json：
     地点->canon 基准空镜（统一结构、人群背对镜头、无主要人物特写）；角色->定妆图；道具->干净单体图。
-    已有 reference_image_url 的跳过，便于断点续跑复用。返回 name -> url。"""
+    已有锚点的跳过，便于断点续跑复用。返回 name -> 可直接喂图像生成的 ref：
+    优先本地锚点图（base64 data URI，永不过期）；无本地文件才回退 TOS URL（24h 过期，曾导致复用失败）。"""
     stage = ctx.workspace.read_stage("02_assets.json")
     assets = list(stage.get("assets") or [])
     # Consistency Bible：统一校服 + 各地点固定布局，烘进每张锚点图，保证跨镜头统一。
@@ -525,6 +538,16 @@ def ensure_asset_anchors(ctx: SkillContext, style_context: str = "", only_names:
             continue
         if only_names is not None and name not in only_names:
             continue
+        local = str(asset.get("reference_image_local_path") or "")
+        if local and Path(local).exists():
+            anchors[name] = media_ref(local)
+            continue
+        fallback = ctx.workspace.assets_dir / f"{safe_name(name)}.png"
+        if fallback.exists():
+            asset["reference_image_local_path"] = str(fallback)
+            anchors[name] = media_ref(str(fallback))
+            changed = True
+            continue
         if asset.get("reference_image_url"):
             anchors[name] = str(asset["reference_image_url"])
             continue
@@ -532,7 +555,7 @@ def ensure_asset_anchors(ctx: SkillContext, style_context: str = "", only_names:
         path = ctx.ark.download(url, ctx.workspace.assets_dir / f"{safe_name(name)}.png")
         asset["reference_image_url"] = url
         asset["reference_image_local_path"] = str(path)
-        anchors[name] = url
+        anchors[name] = media_ref(str(path))
         changed = True
     if changed:
         ctx.workspace.write_stage("02_assets.json", {**stage, "assets": assets})
@@ -552,14 +575,15 @@ def anchor_prompt(asset: dict[str, Any], style_context: str = "", uniform: str =
     style_line += consistency
     if asset_type == "location":
         framing = (
-            f"{name} 的统一基准空镜（canon base），电影写实风格，竖屏9:16；"
+            f"{name} 的统一基准空镜（canon base），竖屏9:16；"
             "完整交代地点结构与陈设，统一校服的学生在前景/中景/远景纵深错落分布、有单独走的也有两三人结伴的、"
             "彼此拉开自然间距地朝场景纵深方向流动（自然分散、不拥挤、不聚堆成团、不排队列队），无主要人物特写、不依赖文字招牌、无海报无拼贴。"
+            "光线为自然明亮均匀的日光、自然真实色彩，不要浓雾、不要强烈丁达尔光束/光柱、避免强逆光剪影与过度滤镜。"
         )
     elif asset_type == "character":
         framing = (
             f"{name} 的角色定妆参考图（character sheet），单人、全身、正面、中性自然站姿、"
-            "纯净浅灰摄影棚背景、均匀柔光，写实电影质感，无文字、无海报、无拼贴。"
+            "纯净浅灰摄影棚背景、均匀柔光，无文字、无海报、无拼贴。"
         )
     else:
         framing = (
@@ -578,11 +602,33 @@ def normalize_id_filter(value: Any) -> set[str]:
     return set()
 
 
+def durable_media_ref(local_path: str, url: str = "") -> str:
+    """优先本地文件（base64 data URI，永不过期），无本地文件才回退 URL（TOS URL 24h 过期）。"""
+    local_path = (local_path or "").strip()
+    if local_path and Path(local_path).exists():
+        return media_ref(local_path)
+    return (url or "").strip()
+
+
+def asset_image_refs(names: list[str], asset_context: dict[str, dict[str, Any]]) -> list[str]:
+    """按 location -> character -> prop 优先级取资产锚点图 refs（本地优先，不过期），喂图片生成。"""
+    refs: list[str] = []
+    for want in ("location", "character", "prop"):
+        for n in names:
+            asset = asset_context.get(n) or {}
+            if str(asset.get("type")) != want:
+                continue
+            ref = durable_media_ref(str(asset.get("reference_image_local_path") or ""), str(asset.get("reference_image_url") or ""))
+            if ref and ref not in refs:
+                refs.append(ref)
+    return refs
+
+
 def t2v_reference_urls(kf: dict[str, Any], asset_context: dict[str, dict[str, Any]]) -> list[str]:
     """t2v 镜的 reference_image，按优先级截断（cap 3）：无脸背影方向首帧 + 地点 canon + 在场角色定妆图，道具靠后。
-    无脸背影首帧用来给 t2v『带』方向与构图，canon/定妆图维持场景与身份。"""
+    无脸背影首帧用来给 t2v『带』方向与构图，canon/定妆图维持场景与身份。优先本地图（不过期）。"""
     refs: list[str] = []
-    back_view = str(kf.get("first_frame_url") or kf.get("first_frame_local_path") or "").strip()
+    back_view = durable_media_ref(str(kf.get("first_frame_local_path") or ""), str(kf.get("first_frame_url") or ""))
     if back_view:
         refs.append(back_view)
     names = kf.get("reference_asset_names") or []
@@ -591,15 +637,15 @@ def t2v_reference_urls(kf: dict[str, Any], asset_context: dict[str, dict[str, An
             asset = asset_context.get(n) or {}
             if str(asset.get("type")) != want:
                 continue
-            url = str(asset.get("reference_image_url") or "").strip()
-            if url and url not in refs:
-                refs.append(url)
+            ref = durable_media_ref(str(asset.get("reference_image_local_path") or ""), str(asset.get("reference_image_url") or ""))
+            if ref and ref not in refs:
+                refs.append(ref)
     return refs[:3]
 
 
 def continuity_reference_urls(task_order: list[str], existing: dict[str, dict[str, Any]], atom_id: str) -> list[str]:
     """取最近一个已生成成功镜头的首帧作参考图，给后一镜首帧做跨镜连续性。
-    只喂给图片生成（首帧→首帧有助一致性），绝不喂给视频生成（参考图会带歪视频方向）。"""
+    只喂给图片生成（首帧→首帧有助一致性），绝不喂给视频生成（参考图会带歪视频方向）。优先本地图（不过期）。"""
     if atom_id not in task_order:
         return []
     index = task_order.index(atom_id)
@@ -607,9 +653,9 @@ def continuity_reference_urls(task_order: list[str], existing: dict[str, dict[st
         previous = existing.get(previous_id) or {}
         if previous.get("state") != "ready":
             continue
-        url = str(previous.get("first_frame_url") or "").strip()
-        if url:
-            return [url]
+        ref = durable_media_ref(str(previous.get("first_frame_local_path") or ""), str(previous.get("first_frame_url") or ""))
+        if ref:
+            return [ref]
     return []
 
 
@@ -641,26 +687,51 @@ class VideoGenerateArkSkill:
         chain_reference_video = bool(input_data.get("chain_reference_video"))
         style_context = load_style_context(ctx)
         asset_context = load_asset_context(ctx)
+        # i2v 首帧被 PrivacyInformation 拦时自动无脸重试要用到原始首帧 prompt，从 plan 取。
+        plan_tasks = {
+            str(t.get("atomic_shot_id")): t
+            for t in ctx.workspace.read_stage("05_keyframe_plan.json").get("keyframe_tasks") or []
+        }
         for kf in keyframes:
             try:
+                atom_id = str(kf.get("atomic_shot_id"))
                 render_mode = str(kf.get("render_mode") or "i2v")
                 prompt = video_prompt_with_style(str(kf.get("video_prompt", "")), style_context)
                 dur = int(kf.get("duration") or 5)
+                if not 5 <= dur <= 10:
+                    kf = {**kf, "duration_clamped_from": dur}
+                    dur = max(5, min(10, dur))
                 if render_mode == "t2v":
                     # 露脸/对话镜：纯文生视频规避 i2v 真实人脸审核；无脸背影首帧+canon+定妆图作 reference_image 维持方向/场景/身份。
                     url = ctx.ark.generate_video_t2v(prompt, duration=dur, reference_image_urls=t2v_reference_urls(kf, asset_context))
                 else:
-                    first_frame = str(kf.get("first_frame_url") or kf.get("first_frame_local_path") or "")
+                    # 首帧本地优先（TOS URL 24h 过期，曾导致复用失败）。
+                    first_frame = durable_media_ref(str(kf.get("first_frame_local_path") or ""), str(kf.get("first_frame_url") or ""))
                     if not first_frame:
-                        raise ValueError(f"{kf.get('atomic_shot_id')} 缺少首帧")
-                    url = ctx.ark.generate_video(
-                        prompt,
-                        first_frame,
-                        duration=dur,
-                        reference_video_urls=[previous] if (chain_reference_video and previous) else None,
-                    )
+                        raise ValueError(f"{atom_id} 缺少首帧")
+                    ref_videos = [previous] if (chain_reference_video and previous) else None
+                    try:
+                        url = ctx.ark.generate_video(prompt, first_frame, duration=dur, reference_video_urls=ref_videos)
+                    except RuntimeError as exc:
+                        if "InputImageSensitiveContentDetected" not in str(exc):
+                            raise
+                        # 首帧含真人脸被审核拦下：自动重出一张严格无脸版首帧，重试一次（脸在输出视频里照常出现）。
+                        base_ff_prompt = str((plan_tasks.get(atom_id) or {}).get("first_frame_prompt") or kf.get("first_frame_prompt") or "")
+                        if not base_ff_prompt:
+                            raise
+                        faceless_prompt = (
+                            base_ff_prompt
+                            + "\n【无脸强制改写】画面中所有人物一律只以背影/正后方呈现，或面部被前景物件完全遮挡；"
+                            "完全看不到任何人脸，连侧脸轮廓也不可见。"
+                        )
+                        refs = asset_image_refs(list(kf.get("reference_asset_names") or []), asset_context)
+                        new_first_url = ctx.ark.generate_image(ark_image_prompt(faceless_prompt), refs=refs or None)
+                        first_path = resolve_workspace_path(ctx, kf.get("first_frame_local_path")) or ctx.workspace.keyframes_dir / f"{safe_name(atom_id)}_first.png"
+                        ctx.ark.download(new_first_url, first_path)
+                        kf = {**kf, "first_frame_url": new_first_url, "first_frame_local_path": str(first_path), "auto_faceless_retry": True}
+                        url = ctx.ark.generate_video(prompt, str(first_path), duration=dur, reference_video_urls=ref_videos)
                 previous = url
-                local = ctx.ark.download(url, ctx.workspace.clips_dir / f"{safe_name(str(kf.get('atomic_shot_id')))}.mp4")
+                local = ctx.ark.download(url, ctx.workspace.clips_dir / f"{safe_name(atom_id)}.mp4")
                 clips.append({**kf, "state": "ready", "video_url": url, "video_local_path": str(local)})
             except Exception as exc:
                 clips.append({**kf, "state": "failed", "error": str(exc)})
@@ -782,7 +853,7 @@ def frame_prompt(prompt: str, assets: list[dict[str, Any]] | None = None, style_
     asset_context = "\n".join(asset_lines)
     asset_names = "、".join(str(asset.get("name", "")).strip() for asset in assets or [] if str(asset.get("name", "")).strip())
     base = (
-        "竖屏9:16图生视频控制帧；电影写实风格；无文字、无品牌、无UI、无拼贴。"
+        "竖屏9:16图生视频控制帧；无文字、无品牌、无UI、无拼贴。"
         "保持人物身份、服装、道具、地点、运动方向和物理状态连续。"
         "方向用相机相对语言；动作/方向镜用背影或过肩、把运动目的地放在画面纵深；对话镜用过肩、避免贴镜头大正脸。\n"
     )
@@ -794,7 +865,7 @@ def frame_prompt(prompt: str, assets: list[dict[str, Any]] | None = None, style_
     if len(full_prompt) <= 800 or not asset_names:
         return full_prompt
     compact_base = (
-        "竖屏9:16图生视频控制帧；电影写实风格；无文字、无品牌、无UI、无拼贴。"
+        "竖屏9:16图生视频控制帧；无文字、无品牌、无UI、无拼贴。"
         "保持人物身份、服装、道具、地点、运动方向和物理状态连续。"
         "方向用相机相对语言；动作/方向镜用背影或过肩、把运动目的地放在画面纵深；对话镜用过肩、避免贴镜头大正脸。\n"
     )
@@ -804,10 +875,42 @@ def frame_prompt(prompt: str, assets: list[dict[str, Any]] | None = None, style_
     return compact_base + prompt
 
 
+# 电影/写实风格的打磨版摘要（经实测最接近真实参考片的配方）。
+FILM_REAL_STYLE_SUMMARY = (
+    "电影写实风格；胶片柔光质感、低对比、克制不过饱和、保留空气透视与轻微雾感的真实光线；"
+    "自然纪实的真实抓拍氛围；写实自然表演；清晰空间连续性；"
+    "避免锐利干净的CG/三维渲染感、避免网感滤镜与过度锐化、避免短剧夸张与漫画格。"
+)
+
+
 def compact_style_summary(style_context: str) -> str:
-    return ("电影写实风格；胶片柔光质感、低对比、克制不过饱和、保留空气透视与轻微雾感的真实光线；"
-            "自然纪实的真实抓拍氛围；写实自然表演；清晰空间连续性；"
-            "避免锐利干净的CG/三维渲染感、避免网感滤镜与过度锐化、避免短剧夸张与漫画格。")
+    """从所选风格档案提炼一句风格摘要。电影/写实类风格用打磨过的固定摘要；
+    其他风格（短剧/漫剧/动画/纪实/自定义）从档案 label/visual_rules/avoid 动态拼，
+    避免硬注入"电影写实"覆盖用户选择。"""
+    text = (style_context or "").strip()
+    profile: dict[str, Any] | None = None
+    if text.startswith("{"):
+        try:
+            stage = json.loads(text)
+            candidate = stage.get("style") if isinstance(stage, dict) else None
+            profile = candidate if isinstance(candidate, dict) else (stage if isinstance(stage, dict) else None)
+        except (json.JSONDecodeError, AttributeError):
+            profile = None
+    if profile and profile.get("label"):
+        label = str(profile.get("label") or "").strip()
+        if str(profile.get("id") or "") == "film" or "电影" in label or "写实" in label:
+            return FILM_REAL_STYLE_SUMMARY
+        rules = "、".join(str(r).strip() for r in (profile.get("visual_rules") or [])[:4] if str(r).strip())
+        avoid = "、".join(str(a).strip() for a in (profile.get("avoid") or [])[:3] if str(a).strip())
+        summary = f"{label}；{rules}" if rules else label
+        if avoid:
+            summary += f"；避免{avoid}"
+        return summary
+    # markdown(wiki/style.md) 路径：含电影/写实关键词或为空 -> 固定摘要；否则压缩前几行非空文本。
+    if not text or "电影" in text or "写实" in text:
+        return FILM_REAL_STYLE_SUMMARY
+    lines = [line.strip("# ").strip() for line in text.splitlines() if line.strip()]
+    return clip_text("；".join(lines[:3]), 120) or FILM_REAL_STYLE_SUMMARY
 
 
 def asset_prompt_line(asset: dict[str, Any]) -> str:
@@ -826,7 +929,10 @@ def clip_text(value: str, limit: int) -> str:
 
 
 def video_prompt_with_style(prompt: str, style_context: str = "") -> str:
-    prompt = f"{prompt}{CLEAN_FRAME_RULE}"
+    # 文档里的 prompt 多以"。"结尾、CLEAN_FRAME_RULE 又以"。"开头，拼接前去重，
+    # 并把历史文档里已存在的"。。"一并归一，避免双句号进入生成请求。
+    prompt = f"{prompt.strip().rstrip('。')}{CLEAN_FRAME_RULE}"
+    prompt = re.sub(r"。{2,}", "。", prompt)
     if not style_context:
         return prompt
     return f"已选风格档案，必须严格遵守：\n{style_context}\n\n视频提示词：\n{prompt}"
