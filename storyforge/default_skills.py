@@ -805,7 +805,9 @@ def frame_prompt(prompt: str, assets: list[dict[str, Any]] | None = None, style_
 
 
 def compact_style_summary(style_context: str) -> str:
-    return "电影风格；写实自然表演；克制统一色彩；清晰空间连续性；避免短剧夸张、漫画格、网感字幕。"
+    return ("电影写实风格；胶片柔光质感、低对比、克制不过饱和、保留空气透视与轻微雾感的真实光线；"
+            "自然纪实的真实抓拍氛围；写实自然表演；清晰空间连续性；"
+            "避免锐利干净的CG/三维渲染感、避免网感滤镜与过度锐化、避免短剧夸张与漫画格。")
 
 
 def asset_prompt_line(asset: dict[str, Any]) -> str:
