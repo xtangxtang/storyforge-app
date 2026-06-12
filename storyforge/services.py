@@ -157,7 +157,8 @@ class ArkClient:
         content: list[dict[str, Any]] = [
             {"type": "text", "text": f"{prompt_en} --ratio 9:16 --resolution 720p --duration {max(5, min(10, duration))}"},
         ]
-        for url in (reference_image_urls or [])[:3]:
+        # 参考图上限放宽到 4（API 若拒收会在提交期 400，由调用方阶梯降级，不产生费用）。
+        for url in (reference_image_urls or [])[:4]:
             content.append({"type": "image_url", "image_url": {"url": media_ref(url)}, "role": "reference_image"})
         for url in (reference_video_urls or [])[:3]:
             content.append({"type": "video_url", "video_url": {"url": video_url_ref(url)}, "role": "reference_video"})
@@ -176,14 +177,25 @@ class ArkClient:
     def _poll_video(self, task_id: str) -> str:
         http = require_requests()
         deadline = time.time() + 900
+        consecutive_errors = 0
         while time.time() < deadline:
             time.sleep(6)
-            response = http.get(
-                f"{self.config.ark_base_url}/contents/generations/tasks/{task_id}",
-                headers=self.headers,
-                proxies=self.config.proxies,
-                timeout=60,
-            )
+            try:
+                response = http.get(
+                    f"{self.config.ark_base_url}/contents/generations/tasks/{task_id}",
+                    headers=self.headers,
+                    proxies=self.config.proxies,
+                    timeout=60,
+                )
+            except http.exceptions.RequestException as exc:
+                # 代理/SSL 闪断等瞬时网络错误：任务已在服务端计费生成，轮询必须容错重试，
+                # 否则会"丢失"已付费的任务（实测 2026-06-11 公司代理闪断导致两条已提交任务被误判失败）。
+                consecutive_errors += 1
+                if consecutive_errors >= 8:
+                    raise RuntimeError(f"Ark video poll network failed after retries: {task_id} -> {exc}") from exc
+                time.sleep(min(60, 5 * consecutive_errors))
+                continue
+            consecutive_errors = 0
             if response.status_code != 200:
                 raise RuntimeError(f"Ark video poll failed HTTP {response.status_code}: {response.text[:500]}")
             data = response.json()
