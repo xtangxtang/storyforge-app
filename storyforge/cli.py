@@ -25,6 +25,11 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("skill_id")
     run.add_argument("--input-json", default="{}", help="JSON object passed to the skill")
 
+    advise = sub.add_parser("advise-rerun")
+    advise.add_argument("--changed-stage", help="Stage json that was edited, for example 03_storyboards.json")
+    advise.add_argument("--changed-file", help="File path that was edited")
+    advise.add_argument("--scene-id", help="Optional scene id to focus recommendations")
+
     pipe = sub.add_parser("pipeline-from-script")
     pipe.add_argument("--script", required=True, help="Path to script text/markdown")
     pipe.add_argument("--style", help="Production style id, for example film, short_drama, comic_drama, anime, documentary")
@@ -46,8 +51,8 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(registry.describe(), ensure_ascii=False, indent=2))
         return 0
 
-    if args.cmd == "run" and not args.project:
-        print("--project is required for `run`", file=sys.stderr)
+    if args.cmd in {"run", "advise-rerun"} and not args.project:
+        print(f"--project is required for `{args.cmd}`", file=sys.stderr)
         return 2
 
     projects_root = Path(args.projects_root)
@@ -69,10 +74,21 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps({"ok": result.ok, "message": result.message, **result.data}, ensure_ascii=False, indent=2))
         return 0 if result.ok else 1
 
+    if args.cmd == "advise-rerun":
+        input_data = {
+            "changed_stage": args.changed_stage or "",
+            "changed_file": args.changed_file or "",
+            "scene_id": args.scene_id or "",
+            "skip_agent_review": True,
+        }
+        result = runner.run("stage_rerun_advisor", input_data)
+        print(json.dumps({"ok": result.ok, "message": result.message, **result.data}, ensure_ascii=False, indent=2))
+        return 0 if result.ok else 1
+
     if args.cmd == "pipeline-from-script":
-        sequence = ["script_ingest", "style_select", "consistency_bible", "asset_design", "storyboard_plan", "atomic_shot_plan", "keyframe_plan"]
+        sequence = ["script_ingest", "style_select", "consistency_bible", "scene_bible", "scene_reference_plan", "cross_scene_continuity", "asset_design", "storyboard_plan", "atomic_shot_plan", "continuity_validator", "keyframe_plan"]
         if args.with_media:
-            sequence.extend(["keyframe_import", "video_generate_ark"])
+            sequence.extend(["keyframe_import", "video_generate_ark", "scene_transition_plan"])
         script_path = Path(args.script)
         script_input = {"script_path": str(script_path)}
         style_input = {"style": args.style, "style_note": args.style_note} if args.style else {"force_prompt": True}
@@ -92,15 +108,18 @@ def main(argv: list[str] | None = None) -> int:
                 return 1
             if result.data.get("awaiting_user_selection"):
                 return 0
+            if result.data.get("validation_blocked"):
+                print(json.dumps(validation_block_payload(project_id, skill_id), ensure_ascii=False))
+                return 0
             if should_pause_for_user_review(result.data, args.auto_continue):
                 print(json.dumps(review_pause_payload(project_id, skill_id, sequence), ensure_ascii=False))
                 return 0
         return 0
 
     if args.cmd == "pipeline-from-document":
-        sequence = ["document_ingest", "script_ingest", "style_select", "consistency_bible", "asset_design", "storyboard_plan", "atomic_shot_plan", "keyframe_plan"]
+        sequence = ["document_ingest", "script_ingest", "style_select", "consistency_bible", "scene_bible", "scene_reference_plan", "cross_scene_continuity", "asset_design", "storyboard_plan", "atomic_shot_plan", "continuity_validator", "keyframe_plan"]
         if args.with_media:
-            sequence.extend(["keyframe_import", "video_generate_ark"])
+            sequence.extend(["keyframe_import", "video_generate_ark", "scene_transition_plan"])
         document_input = {"document_path": str(Path(args.document))}
         style_input = {"style": args.style, "style_note": args.style_note} if args.style else {"force_prompt": True}
         print(json.dumps({"project_id": project_id, "project_root": str(workspace.root)}, ensure_ascii=False))
@@ -118,6 +137,9 @@ def main(argv: list[str] | None = None) -> int:
             if not result.ok:
                 return 1
             if result.data.get("awaiting_user_selection"):
+                return 0
+            if result.data.get("validation_blocked"):
+                print(json.dumps(validation_block_payload(project_id, skill_id), ensure_ascii=False))
                 return 0
             if should_pause_for_user_review(result.data, args.auto_continue):
                 print(json.dumps(review_pause_payload(project_id, skill_id, sequence), ensure_ascii=False))
@@ -166,6 +188,16 @@ def review_pause_payload(project_id: str, current_skill: str, sequence: list[str
         payload["next_skill"] = next_skill
         payload["next_command"] = f"python -m storyforge.cli --project {project_id} run {next_skill}"
     return payload
+
+
+def validation_block_payload(project_id: str, current_skill: str) -> dict[str, object]:
+    return {
+        "paused": True,
+        "reason": "continuity_validation_blocked",
+        "project_id": project_id,
+        "current_skill": current_skill,
+        "message": "连续性验证发现阻塞问题。请查看 review/user_continuity_validator.md 和 stages/04b_continuity_validation.json，修改后重跑 atomic_shot_plan 或 continuity_validator。",
+    }
 
 
 if __name__ == "__main__":

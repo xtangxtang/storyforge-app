@@ -8,6 +8,9 @@
 
 ```text
 stages/01_script.json
+stages/00c_scene_bible.json
+stages/00e_cross_scene_continuity.json
+wiki/*
 ```
 
 ## Writes
@@ -21,6 +24,8 @@ review/02_assets.md
 
 - 保留每个资产的 `type`、`name`、`description` 和叙事功能。
 - 为每个资产补充 `asset_id`、`story_function`、`visual_identity`、`visual_anchor_prompt`、`negative_prompt`、`consistency_notes`。
+- 资产设计必须能被 `scene_bible` 里的大场景复用：地点结构、角色携带物、道具朝向和物理状态不能与场景制作包冲突。
+- 资产设计必须遵守 `cross_scene_continuity`：角色服装、携带物、道具归属、损坏/丢失/转移状态不能在不同大场景之间无解释跳变。
 - 补充影视连续性字段：
   - `continuity_invariants`：跨镜头绝不能变的服装、身份、地点结构、道具形态、方向关系。
   - `allowed_variations`：可以随镜头变化的景别、光影、表演强弱、遮挡、距离。

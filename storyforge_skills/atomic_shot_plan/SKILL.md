@@ -6,6 +6,8 @@
 
 ```text
 stages/03_storyboards.json
+stages/00c_scene_bible.json
+stages/00e_cross_scene_continuity.json
 wiki/*
 ```
 
@@ -22,6 +24,9 @@ review/04_atomic_shots.md
 - 每个原子镜头必须包含：
   - `shot_design`：`camera`、`movement`、`blocking`、`performance`、`edit_intent`，给导演/剪辑看的拍摄逻辑。
   - `generation_strategy`：`render_mode`、`first_frame_type`、`control_frame_role`、`reference_assets`、`failure_modes`、`moderation_notes`，给图片/视频生成看的执行策略。
+- 每个原子镜头必须继承 `scene_id`，并从 Scene Bible 继承地点、光线、轴线、人物位置、道具状态和物理规则。
+- 每个原子镜头必须从 Cross Scene Continuity 继承跨场景的角色服装、携带物、道具归属、身体/情绪状态。
+- `continuity_state_start` 和 `continuity_state_end` 优先写成结构化 object，包含 `characters`、`camera`、`lighting`、`props`、`location`、`physics`、`summary`。
 - `render_mode`：
   - 默认 `i2v`：能用无清晰真人脸的背影、过肩、场地空镜或物件特写作为首帧时使用。
   - 只有必须从正脸情绪/对白特写开始、无法合理做无脸首帧时才使用 `t2v`。
@@ -30,7 +35,7 @@ review/04_atomic_shots.md
 - `duration` 默认 5-10 秒；动作节拍要与时长匹配，不能把过多动作塞进短镜头。
 - 相邻镜头共享状态：前一镜的 `continuity_state_end` 应自然成为后一镜的 `continuity_state_start`。
 - `reference_asset_names` 只列首帧画面里真正出现的资产；地点 canon 优先，避免无关角色触发提示词审核或身份漂移。
-- 所有字段值使用简体中文，并遵守 `wiki/style.md`、`wiki/consistency.md` 和 `stages/02_assets.json`。
+- 所有字段值使用简体中文，并遵守 `wiki/style.md`、`wiki/consistency.md`、`wiki/scene_bible.md`、`wiki/cross_scene_continuity.md` 和 `stages/02_assets.json`。
 
 ## CLI
 

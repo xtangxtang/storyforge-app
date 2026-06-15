@@ -37,6 +37,10 @@ class ProjectWorkspace:
         return self.root / "assets"
 
     @property
+    def scene_refs_dir(self) -> Path:
+        return self.assets_dir / "scene_refs"
+
+    @property
     def keyframes_dir(self) -> Path:
         return self.root / "keyframes"
 
@@ -75,6 +79,7 @@ class ProjectWorkspace:
             self.project_cards_dir,
             self.stages_dir,
             self.assets_dir,
+            self.scene_refs_dir,
             self.keyframes_dir,
             self.clips_dir,
             self.review_dir,
@@ -159,13 +164,27 @@ class ProjectWorkspace:
             self.raw_dir / "script.md",
             self.wiki_dir / "style.md",
             self.wiki_dir / "consistency.md",
+            self.wiki_dir / "scene_bible.md",
+            self.wiki_dir / "cross_scene_continuity.md",
             self.wiki_dir / "knowledge.md",
             self.wiki_dir / "continuity.md",
             self.stage_path("00_style.json"),
             self.stage_path("00b_consistency.json"),
+            self.stage_path("00c_scene_bible.json"),
+            self.stage_path("00d_scene_reference_plan.json"),
+            self.stage_path("00d_scene_references.json"),
+            self.stage_path("00e_cross_scene_continuity.json"),
             self.stage_path("01_script.json"),
             self.stage_path("02_assets.json"),
             self.stage_path("03_storyboards.json"),
+            self.stage_path("04_atomic_shots.json"),
+            self.stage_path("04b_continuity_validation.json"),
+            self.stage_path("05_keyframe_plan.json"),
+            self.stage_path("05_keyframes.json"),
+            self.stage_path("06_videos.json"),
+            self.stage_path("06b_scene_transition_plan.json"),
+            self.stage_path("06b_scene_transitions.json"),
+            self.stage_path("08_stage_rerun_advisor.json"),
         ]:
             if path.exists():
                 parts.append(f"---\nsource: {path.relative_to(self.root).as_posix()}\n\n{path.read_text(encoding='utf-8')[:12000]}")
