@@ -1,10 +1,8 @@
 # keyframe_generate_ark
 
-Optional fallback for generating first/last control frames through Ark image
-generation.
+通过 Ark 图片生成控制首帧的备用路径。
 
-This is not the default Storyforge image path. Use it only when the user
-explicitly wants automated Ark image generation instead of Codex-created images.
+这不是 Storyforge 默认图片路径。默认仍由 Codex 根据 `keyframe_plan` 生成图片；只有用户明确要求自动走 Ark 文生图时才使用本 skill。
 
 ## Reads
 
@@ -23,10 +21,12 @@ review/05_keyframes.md
 
 ## Rules
 
-- Generate a first frame and last frame per atomic shot through Ark.
-- Mark outputs with `image_provider: ark`.
-- Last frame should reference the first frame to reduce drift.
-- Keep identity, clothing, prop state, and movement direction consistent.
+- 默认每个原子镜头只生成 first-frame-only 控制首帧。
+- 首帧必须遵守 `control_frame_role`、`frame_must_show`、`frame_must_not_show`、资产锚点和 Consistency Bible。
+- 生成结果标记 `image_provider: ark`，并写入 `stages/05_keyframes.json`。
+- 关键帧要保持角色身份、统一校服、地点布局、道具状态、光线方向和运动方向连续。
+- 不依赖可读中文招牌、字幕、标题字、水印或 logo。
+- 生成失败要记录到 stage，不中断整个批次。
 
 ## CLI
 

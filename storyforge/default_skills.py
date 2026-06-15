@@ -168,7 +168,7 @@ class ConsistencyBibleSkill:
 
 class AssetDesignSkill:
     id = "asset_design"
-    description = "为角色、地点和道具设计稳定的视觉锚点与可复用图片提示词。"
+    description = "为角色、地点和道具设计稳定的影视视觉锚点与可复用图片提示词。"
 
     def run(self, ctx: SkillContext, input_data: dict[str, Any]) -> SkillResult:
         script = ctx.workspace.read_stage("01_script.json")
@@ -176,7 +176,18 @@ class AssetDesignSkill:
         if not assets:
             return SkillResult(False, "stages/01_script.json 中没有找到 assets", {})
         data = ctx.llm.chat_json(
-            "你是 Storyforge 的 asset_design。输出严格 JSON：{assets:[...]}。对每个 asset 保留 type/name/description，并补充 visual_anchor_prompt、negative_prompt、consistency_notes。提示词必须足够具体，便于图片生成；不要海报感、拼贴感或设定集排版；必须保持身份、服装、地点细节在后续镜头中稳定。必须遵守 workspace context 中的 Consistency Bible（consistency.md）：每个 character 的 visual_anchor_prompt 一律穿统一校服（除非 bible 的 fixed_outfits 另有规定），每个 location 一律采用 bible 里该地点的固定布局与方位，复用道具用 bible 的统一外观，绝不各自发明。同时遵守 Style Profile。所有字段值和说明必须使用简体中文。",
+            "你是 Storyforge 的 asset_design。输出严格 JSON：{assets:[...]}。"
+            "对每个 asset 保留 type/name/description，并补充这些字段："
+            "asset_id, story_function, visual_identity, visual_anchor_prompt, negative_prompt, consistency_notes, "
+            "continuity_invariants, allowed_variations, forbidden_variations, cinematic_usage, generation_anchors。"
+            "字段含义：story_function 是该资产在叙事里的功能；visual_identity 是影视美术可复用的外观身份；"
+            "continuity_invariants 是跨镜头绝不能变的身份/服装/位置/材质/朝向规则；allowed_variations 是可随镜头变化的表演、光影、距离、局部遮挡；"
+            "forbidden_variations 是绝对禁止的漂移；cinematic_usage 包含 best_framings、lighting_notes、movement_notes；"
+            "generation_anchors 包含 positive_prompt、negative_prompt、reference_priority，用于后续图片/视频生成。"
+            "提示词必须足够具体、可拍、可生成；不要海报感、拼贴感、设定集排版或 UI 说明；"
+            "必须保持身份、服装、地点结构、道具状态在后续镜头中稳定。"
+            "必须遵守 workspace context 中的 Consistency Bible（consistency.md）：每个 character 的 visual_anchor_prompt 一律穿统一校服（除非 bible 的 fixed_outfits 另有规定），每个 location 一律采用 bible 里该地点的固定布局与方位，复用道具用 bible 的统一外观，绝不各自发明。"
+            "同时遵守 Style Profile。所有字段值和说明必须使用简体中文。",
             f"Workspace context:\n{ctx.workspace.context_pack()}\n\nAssets:\n{json.dumps(assets, ensure_ascii=False)}",
             temperature=float(input_data.get("temperature", 0.2)),
             tag=self.id,
@@ -195,6 +206,7 @@ class AssetDesignSkill:
                 }
                 for asset in assets
             ]
+        designed = [normalize_asset_design(asset, idx) for idx, asset in enumerate(designed, 1)]
         out = {"source": self.id, "assets": designed}
         ctx.workspace.write_stage("02_assets.json", out)
         write_review_markdown(ctx.workspace.review_dir / "02_assets.md", "视觉资产设计审阅", out)
@@ -203,14 +215,24 @@ class AssetDesignSkill:
 
 class StoryboardPlanSkill:
     id = "storyboard_plan"
-    description = "基于结构化剧本和项目记忆生成可审阅的分镜节拍。"
+    description = "基于结构化剧本和项目记忆生成可审阅的导演分镜节拍。"
 
     def run(self, ctx: SkillContext, input_data: dict[str, Any]) -> SkillResult:
         script = ctx.workspace.read_stage("01_script.json")
         if not script.get("scenes"):
             return SkillResult(False, "stages/01_script.json 中没有找到 scenes", {})
         data = ctx.llm.chat_json(
-            "你是 Storyforge 的 storyboard_plan。创建严格 JSON：{storyboards:[...]}。每个分镜节拍包含 id, scene_num, shot_num, location, duration(5-10秒), characters, props, description, first_frame_prompt, video_prompt, continuity。必须保留原故事。动作连续、中间没有断点的段落保持为一个连续节拍、不要拆成需要硬切拼接的多条（如骑行→相撞→道歉合为一条）；只在换时间、换地点、换全新机位的真正断点才切镜。方向/进入/相撞类镜头的 first_frame_prompt 用不含清晰真人脸的画面锁方向（无脸背影人物、或场地空镜、或物件特写如自行车前轮），把运动目的地放在画面纵深。每个节拍和 prompt 都必须遵守 workspace context 中的 Consistency Bible（统一校服/地点布局/复用道具）与 Style Profile。所有字段值和说明必须使用简体中文。",
+            "你是 Storyforge 的 storyboard_plan。创建严格 JSON：{storyboards:[...]}。"
+            "每个分镜节拍包含 id, scene_num, shot_num, location, duration(5-10秒), characters, props, description, "
+            "dramatic_intent, camera_design, blocking, screen_direction, edit_value, continuity_risks, "
+            "first_frame_prompt, video_prompt, continuity。"
+            "必须保留原故事。dramatic_intent 写清这个镜头在情绪/信息/冲突上的功能；camera_design 写机位、景别、焦段感、运动动机；"
+            "blocking 写人物与道具在空间里的调度关系；screen_direction 写入画方向、视线方向、运动方向和前后镜头怎样接；"
+            "edit_value 写这个镜头切出去时观众获得的新信息或情绪；continuity_risks 写可能漂移/穿帮/物理不可信的点。"
+            "动作连续、中间没有断点的段落保持为一个连续节拍、不要拆成需要硬切拼接的多条（如骑行→相撞→道歉合为一条）；"
+            "只在换时间、换地点、换全新机位的真正断点才切镜。"
+            "方向/进入/相撞类镜头的 first_frame_prompt 用不含清晰真人脸的画面锁方向（无脸背影人物、或场地空镜、或物件特写如自行车前轮），把运动目的地放在画面纵深。"
+            "每个节拍和 prompt 都必须遵守 workspace context 中的 Consistency Bible（统一校服/地点布局/复用道具）与 Style Profile。所有字段值和说明必须使用简体中文。",
             f"Workspace context:\n{ctx.workspace.context_pack()}\n\nScript JSON:\n{json.dumps(script, ensure_ascii=False)}",
             temperature=float(input_data.get("temperature", 0.25)),
             tag=self.id,
@@ -218,6 +240,7 @@ class StoryboardPlanSkill:
         storyboards = list(data.get("storyboards") or [])
         for idx, sb in enumerate(storyboards, 1):
             sb.setdefault("id", f"sb_{idx:03d}")
+            normalize_storyboard_design(sb)
         out = {"source": self.id, "storyboards": storyboards}
         ctx.workspace.write_stage("03_storyboards.json", out)
         write_review_markdown(ctx.workspace.review_dir / "03_storyboards.md", "分镜计划审阅", out)
@@ -234,7 +257,11 @@ class AtomicShotPlanSkill:
         if not storyboards:
             return SkillResult(False, "没有找到 storyboards", {})
         data = ctx.llm.chat_json(
-            "你是 Storyforge 的 atomic_shot_plan。输出严格 JSON：{atomic_shots:[...]}。每个镜头包含 id, storyboard_id, render_mode(i2v|t2v), duration, purpose, first_frame_prompt, video_prompt, continuity_state_start, continuity_state_end, reference_asset_names。"
+            "你是 Storyforge 的 atomic_shot_plan。输出严格 JSON：{atomic_shots:[...]}。"
+            "每个镜头包含 id, storyboard_id, render_mode(i2v|t2v), duration, purpose, "
+            "shot_design, generation_strategy, first_frame_prompt, video_prompt, continuity_state_start, continuity_state_end, reference_asset_names。"
+            "shot_design 包含 camera, movement, blocking, performance, edit_intent，用影视语言写清这个镜头怎么拍、为什么这么拍。"
+            "generation_strategy 包含 render_mode, first_frame_type, control_frame_role, reference_assets, failure_modes, moderation_notes，用生成语言写清如何稳定产出。"
             "【拆分】动作连续、中间没有断点的相邻动作合并成一条连续镜（如骑行→相撞→道歉合一条），不要拆成多条再硬切；只在换时间/地点/全新机位、或单条超10秒时才另起一镜。不要过度原子化。"
             "【时长】单条 5-10 秒（下限5上限10），一条连续微场景可用 8-10 秒。video_prompt 的动作节拍数必须与 duration 匹配（约每拍1.5-2秒）：节拍装不下就加时长或拆镜，节拍太少则补环境/反应细节。"
             "【中段新出现的人物/地点】Ark 限制 first_frame 与 reference 媒体互斥，i2v 镜里中段才出现、不在首帧画面中的人物/地点没有任何参考图可锁，必须在 video_prompt 文字里写全其外观锚点（校服拼色/发型/眼镜耳机书包等配件/建筑材质结构），否则必然漂移。"
@@ -249,6 +276,7 @@ class AtomicShotPlanSkill:
         atoms = list(data.get("atomic_shots") or [])
         for idx, atom in enumerate(atoms, 1):
             atom.setdefault("id", f"atom_{idx:03d}")
+            normalize_atomic_shot_design(atom)
         out = {"source": self.id, "atomic_shots": atoms}
         ctx.workspace.write_stage("04_atomic_shots.json", out)
         write_review_markdown(ctx.workspace.review_dir / "04_atomic_shots.md", "原子镜头审阅", out)
@@ -257,7 +285,7 @@ class AtomicShotPlanSkill:
 
 class KeyframePlanSkill:
     id = "keyframe_plan"
-    description = "为 Codex 图片生成规划每个原子镜头的首帧/尾帧任务。"
+    description = "为 Codex 图片生成规划每个原子镜头的控制首帧任务。"
 
     def run(self, ctx: SkillContext, input_data: dict[str, Any]) -> SkillResult:
         atoms = list(ctx.workspace.read_stage("04_atomic_shots.json").get("atomic_shots") or [])
@@ -271,6 +299,8 @@ class KeyframePlanSkill:
             named_assets = [asset_context[n] for n in atom.get("reference_asset_names", []) if n in asset_context]
             first_path = Path("keyframes") / f"{safe_name(atom_id)}_first.png"
             raw_last = str(atom.get("last_frame_prompt", "")).strip()
+            shot_design = normalize_shot_design(atom.get("shot_design"), atom)
+            generation_strategy = normalize_generation_strategy(atom.get("generation_strategy"), atom)
             task = {
                 "atomic_shot_id": atom_id,
                 "storyboard_id": atom.get("storyboard_id"),
@@ -281,6 +311,12 @@ class KeyframePlanSkill:
                 "frame_mode": "first_last" if raw_last else "first_frame_only",
                 "render_mode": atom.get("render_mode", "i2v"),
                 "reference_asset_names": atom.get("reference_asset_names", []),
+                "control_frame_role": generation_strategy.get("control_frame_role"),
+                "frame_must_show": default_frame_must_show(atom, generation_strategy),
+                "frame_must_not_show": default_frame_must_not_show(atom, generation_strategy),
+                "motion_to_generate": atom.get("video_prompt", ""),
+                "shot_design": shot_design,
+                "generation_strategy": generation_strategy,
                 "status": "needs_codex_image_generation",
             }
             task["prompt_chars"] = len(str(task["first_frame_prompt"]))
@@ -300,6 +336,7 @@ class KeyframePlanSkill:
                 "prompt_budget_chars": 2000,
                 "compact_threshold_chars": 800,
                 "frame_policy": "默认 first-frame-only 锁方向；仅困难接触/到达镜才规划 last_frame 任务。",
+                "control_frame_policy": "首帧不是分镜插画，而是图生视频控制帧：负责锁定空间、方向、身份、物理初态或动作触发点。",
                 "rule": "每条首帧 prompt 只保留镜头画面、核心动作、物理/方向/光影约束；完整风格和资产锚点由全局引用提供。",
             },
             "keyframe_tasks": tasks,
@@ -427,6 +464,12 @@ class KeyframeGenerateArkSkill:
                     "frame_mode": "first_frame_only",
                     "render_mode": render_mode,
                     "reference_asset_names": list(names),
+                    "control_frame_role": task.get("control_frame_role"),
+                    "frame_must_show": task.get("frame_must_show", []),
+                    "frame_must_not_show": task.get("frame_must_not_show", []),
+                    "motion_to_generate": task.get("motion_to_generate", task.get("video_prompt", "")),
+                    "shot_design": task.get("shot_design", {}),
+                    "generation_strategy": task.get("generation_strategy", {}),
                     "state": "ready",
                 }
                 continue
@@ -445,6 +488,12 @@ class KeyframeGenerateArkSkill:
                     "frame_mode": "first_frame_only",
                     "render_mode": render_mode,
                     "reference_asset_names": list(names),
+                    "control_frame_role": task.get("control_frame_role"),
+                    "frame_must_show": task.get("frame_must_show", []),
+                    "frame_must_not_show": task.get("frame_must_not_show", []),
+                    "motion_to_generate": task.get("motion_to_generate", task.get("video_prompt", "")),
+                    "shot_design": task.get("shot_design", {}),
+                    "generation_strategy": task.get("generation_strategy", {}),
                     "state": "ready",
                 }
             except Exception as exc:
@@ -460,6 +509,12 @@ class KeyframeGenerateArkSkill:
                     "frame_mode": "first_frame_only",
                     "render_mode": render_mode,
                     "reference_asset_names": list(names),
+                    "control_frame_role": task.get("control_frame_role"),
+                    "frame_must_show": task.get("frame_must_show", []),
+                    "frame_must_not_show": task.get("frame_must_not_show", []),
+                    "motion_to_generate": task.get("motion_to_generate", task.get("video_prompt", "")),
+                    "shot_design": task.get("shot_design", {}),
+                    "generation_strategy": task.get("generation_strategy", {}),
                     "state": "failed",
                     "error": str(exc),
                 }
@@ -500,6 +555,8 @@ def keyframe_tasks_from_atoms(ctx: SkillContext, atoms: list[dict[str, Any]]) ->
         named_assets = [asset_context[n] for n in atom.get("reference_asset_names", []) if n in asset_context]
         first_path = Path("keyframes") / f"{safe_name(atom_id)}_first.png"
         raw_last = str(atom.get("last_frame_prompt", "")).strip()
+        shot_design = normalize_shot_design(atom.get("shot_design"), atom)
+        generation_strategy = normalize_generation_strategy(atom.get("generation_strategy"), atom)
         task = {
             "atomic_shot_id": atom_id,
             "storyboard_id": atom.get("storyboard_id"),
@@ -510,6 +567,12 @@ def keyframe_tasks_from_atoms(ctx: SkillContext, atoms: list[dict[str, Any]]) ->
             "frame_mode": "first_last" if raw_last else "first_frame_only",
             "render_mode": atom.get("render_mode", "i2v"),
             "reference_asset_names": atom.get("reference_asset_names", []),
+            "control_frame_role": generation_strategy.get("control_frame_role"),
+            "frame_must_show": default_frame_must_show(atom, generation_strategy),
+            "frame_must_not_show": default_frame_must_not_show(atom, generation_strategy),
+            "motion_to_generate": atom.get("video_prompt", ""),
+            "shot_design": shot_design,
+            "generation_strategy": generation_strategy,
         }
         if raw_last:
             last_path = Path("keyframes") / f"{safe_name(atom_id)}_last.png"
@@ -913,12 +976,171 @@ def compact_style_summary(style_context: str) -> str:
     return clip_text("；".join(lines[:3]), 120) or FILM_REAL_STYLE_SUMMARY
 
 
+def normalize_asset_design(asset: dict[str, Any], idx: int) -> dict[str, Any]:
+    """补齐影视资产圣经字段，同时保留旧流程依赖的 prompt 字段。"""
+    item = dict(asset)
+    name = str(item.get("name") or f"asset_{idx:03d}").strip()
+    asset_type = str(item.get("type") or "asset").strip()
+    description = str(item.get("description") or "").strip()
+    visual_anchor = str(item.get("visual_anchor_prompt") or "").strip()
+    negative = str(item.get("negative_prompt") or "").strip()
+    consistency = str(item.get("consistency_notes") or "").strip()
+    identity = str(item.get("visual_identity") or visual_anchor or description).strip()
+
+    item.setdefault("asset_id", safe_name(f"{asset_type}_{name}"))
+    item.setdefault("story_function", description or f"{name} 在剧本中的叙事资产。")
+    item.setdefault("visual_identity", identity or f"{asset_type} {name} 的稳定影视外观身份。")
+    item.setdefault(
+        "visual_anchor_prompt",
+        visual_anchor
+        or f"{asset_type} {name} 的稳定制作参考；{description}；身份清晰、可复用，不要海报，不要拼贴。",
+    )
+    item.setdefault("negative_prompt", negative or "海报、拼贴、文字设定表、UI、服装不一致、地点结构漂移、道具形态漂移")
+    item.setdefault("consistency_notes", consistency or "作为后续关键帧和视频镜头的身份、空间或道具锚点使用。")
+    item.setdefault("continuity_invariants", [item["visual_identity"], item["consistency_notes"]])
+    item.setdefault("allowed_variations", ["景别、机位、自然光影、表演强弱、局部遮挡可以随镜头变化。"])
+    item.setdefault("forbidden_variations", [item["negative_prompt"]])
+    item.setdefault(
+        "cinematic_usage",
+        {
+            "best_framings": ["根据剧情使用建立镜头、中景调度、局部特写或过肩关系镜头。"],
+            "lighting_notes": ["遵守所选风格档案与场景时间，不为单镜头随意改变光线方向。"],
+            "movement_notes": ["运动方向、角色站位和道具状态必须承接前后镜头。"],
+        },
+    )
+    item.setdefault(
+        "generation_anchors",
+        {
+            "positive_prompt": item["visual_anchor_prompt"],
+            "negative_prompt": item["negative_prompt"],
+            "reference_priority": "高：该资产在画面中出现时必须优先遵守。",
+        },
+    )
+    return item
+
+
+def normalize_storyboard_design(sb: dict[str, Any]) -> dict[str, Any]:
+    description = str(sb.get("description") or "").strip()
+    first_frame = str(sb.get("first_frame_prompt") or "").strip()
+    video_prompt = str(sb.get("video_prompt") or "").strip()
+    continuity = str(sb.get("continuity") or "").strip()
+    sb.setdefault("dramatic_intent", description or "交代剧情信息并推进人物关系。")
+    sb.setdefault("camera_design", first_frame or "根据场景空间选择清晰、可执行的电影机位。")
+    sb.setdefault("blocking", description or "人物、道具与场地关系保持清楚。")
+    sb.setdefault("screen_direction", continuity or "承接前后镜头的运动方向、视线方向与空间轴线。")
+    sb.setdefault("edit_value", video_prompt or "镜头结束时提供可剪辑到下一镜的信息或情绪。")
+    sb.setdefault("continuity_risks", [])
+    return sb
+
+
+def normalize_atomic_shot_design(atom: dict[str, Any]) -> dict[str, Any]:
+    shot_design = normalize_shot_design(atom.get("shot_design"), atom)
+    generation_strategy = normalize_generation_strategy(atom.get("generation_strategy"), atom)
+    atom["shot_design"] = shot_design
+    atom["generation_strategy"] = generation_strategy
+    atom["render_mode"] = str(generation_strategy.get("render_mode") or atom.get("render_mode") or "i2v")
+    generation_strategy["render_mode"] = atom["render_mode"]
+    return atom
+
+
+def normalize_shot_design(value: Any, atom: dict[str, Any]) -> dict[str, Any]:
+    design = dict(value) if isinstance(value, dict) else {}
+    design.setdefault("camera", str(atom.get("first_frame_prompt") or "").strip() or "用可执行机位锁定画面初态。")
+    design.setdefault("movement", str(atom.get("video_prompt") or "").strip() or "镜头运动与人物运动保持自然、可剪辑。")
+    design.setdefault("blocking", str(atom.get("purpose") or "").strip() or "人物与道具在空间中的相对位置清楚。")
+    design.setdefault("performance", "表演自然克制，动作节拍符合真实身体力学。")
+    design.setdefault("edit_intent", str(atom.get("continuity_state_end") or "").strip() or "镜头末态能自然接入下一镜。")
+    return design
+
+
+def normalize_generation_strategy(value: Any, atom: dict[str, Any]) -> dict[str, Any]:
+    strategy = dict(value) if isinstance(value, dict) else {}
+    render_mode = str(strategy.get("render_mode") or atom.get("render_mode") or "i2v").strip() or "i2v"
+    strategy.setdefault("render_mode", render_mode)
+    strategy.setdefault("first_frame_type", infer_first_frame_type(atom))
+    strategy.setdefault("control_frame_role", infer_control_frame_role(atom))
+    strategy.setdefault("reference_assets", atom.get("reference_asset_names", []))
+    strategy.setdefault("failure_modes", default_generation_failure_modes(atom))
+    strategy.setdefault("moderation_notes", "首帧避免清晰真人脸、可读文字、字幕、水印和 logo；输出视频可按剧情出现人物正脸。")
+    return strategy
+
+
+def infer_first_frame_type(atom: dict[str, Any]) -> str:
+    prompt = str(atom.get("first_frame_prompt") or "")
+    if any(token in prompt for token in ["车轮", "脚踏", "手部", "书包", "球拍", "道具", "特写"]):
+        return "物件或局部动作特写"
+    if any(token in prompt for token in ["空镜", "建立", "环境", "校门", "走廊", "操场"]):
+        return "地点建立或环境控制帧"
+    if any(token in prompt for token in ["背影", "过肩", "后脑勺", "后背"]):
+        return "无脸背影或过肩控制帧"
+    return "身份与方向控制帧"
+
+
+def infer_control_frame_role(atom: dict[str, Any]) -> str:
+    frame_type = infer_first_frame_type(atom)
+    if "物件" in frame_type:
+        return "action_trigger"
+    if "地点" in frame_type:
+        return "location_canon"
+    if "背影" in frame_type:
+        return "direction_lock"
+    return "identity_direction_lock"
+
+
+def default_generation_failure_modes(atom: dict[str, Any]) -> list[str]:
+    risks = [
+        "角色身份、校服、发型或配件漂移",
+        "地点布局、运动方向或光线方向与前后镜头不连续",
+        "动作节拍过多导致物理逻辑不可信",
+    ]
+    prompt = f"{atom.get('first_frame_prompt', '')} {atom.get('video_prompt', '')}"
+    if any(token in prompt for token in ["相撞", "急刹", "摔", "碰撞"]):
+        risks.append("硬接触动作过于直给，需用运动模糊、遮挡或余波反应带过")
+    if any(token in prompt for token in ["说", "对白", "道歉", "喊"]):
+        risks.append("模型可能生成字幕或口型文字，必须保持画面无字幕无文字")
+    return risks
+
+
+def default_frame_must_show(atom: dict[str, Any], strategy: dict[str, Any]) -> list[str]:
+    items = []
+    purpose = str(atom.get("purpose") or "").strip()
+    if purpose:
+        items.append(f"镜头目的：{purpose}")
+    frame_type = str(strategy.get("first_frame_type") or "").strip()
+    if frame_type:
+        items.append(f"首帧类型：{frame_type}")
+    assets = [str(name) for name in atom.get("reference_asset_names", []) if str(name).strip()]
+    if assets:
+        items.append(f"首帧可见资产：{'、'.join(assets)}")
+    start_state = str(atom.get("continuity_state_start") or "").strip()
+    if start_state:
+        items.append(f"起始连续状态：{start_state}")
+    return items or ["必须清楚呈现该镜头的空间、方向和动作初态。"]
+
+
+def default_frame_must_not_show(atom: dict[str, Any], strategy: dict[str, Any]) -> list[str]:
+    items = [
+        "清晰可读文字、字幕、标题字、水印、logo、UI 或拼贴排版",
+        "与 Consistency Bible 冲突的服装、地点布局、道具形态或光线方向",
+        "reference_asset_names 之外的无关主要角色抢画面",
+    ]
+    for failure in strategy.get("failure_modes") or []:
+        text = str(failure).strip()
+        if text:
+            items.append(f"避免生成风险：{text}")
+    return items
+
+
 def asset_prompt_line(asset: dict[str, Any]) -> str:
     name = str(asset.get("name", "")).strip()
     asset_type = str(asset.get("type", "asset")).strip()
     description = clip_text(str(asset.get("description", "")).strip(), 36)
-    consistency = clip_text(str(asset.get("consistency_notes", "")).strip(), 52)
-    return f"{asset_type} {name}: {description}；{consistency}"
+    anchors = asset.get("generation_anchors") if isinstance(asset.get("generation_anchors"), dict) else {}
+    positive = str(anchors.get("positive_prompt") or asset.get("visual_anchor_prompt") or "").strip()
+    consistency = str(asset.get("consistency_notes") or asset.get("visual_identity") or "").strip()
+    summary = clip_text(positive or consistency, 64)
+    continuity = clip_text(consistency, 44)
+    return f"{asset_type} {name}: {description}；{summary}；{continuity}"
 
 
 def clip_text(value: str, limit: int) -> str:

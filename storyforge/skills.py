@@ -96,7 +96,15 @@ def review_stage_output(ctx: SkillContext, skill_id: str, description: str, resu
     knowledge_block = review_knowledge_block(ctx)
     try:
         review = ctx.llm.chat_json(
-            "你是 Storyforge 的 stage_review_agent。你要在用户看到材料之前，先审阅一个已经完成的生产阶段。输出严格 JSON，字段包括 score(1-10), verdict(approve|revise|block), strengths, risks, continuity_checks, concrete_revision_requests, user_review_focus, knowledge_capture_candidates。判断要直接、面向制片执行，重点检查故事保真、连续性、物理逻辑、prompt 可用性、字段完整性、下一阶段是否有足够信息。下面提供的【已沉淀制作知识卡】代表经过实测验证的制作决策，优先级高于通用常识：如果产物遵循了这些知识（例如 first-frame-only 首帧驱动、背影/过肩锁方向、不依赖中文招牌文字、单条视频≥5秒），不要把它判成风险或要求改回通用做法；只在产物违背知识卡、或存在知识卡未覆盖的真实问题时才提风险与修改。所有字段值必须使用简体中文。",
+            "你是 Storyforge 的 stage_review_agent。你要在用户看到材料之前，先审阅一个已经完成的生产阶段。"
+            "输出严格 JSON，字段包括 score(1-10), verdict(approve|revise|block), strengths, risks, continuity_checks, "
+            "director_review, continuity_review, generation_risk_review, concrete_revision_requests, user_review_focus, knowledge_capture_candidates。"
+            "director_review 检查戏剧意图、机位、景别、调度、表演和剪辑价值是否像可拍的影视方案；"
+            "continuity_review 检查角色/服装/地点/道具/光线/轴线/运动方向/物理状态是否承接；"
+            "generation_risk_review 检查提示词是否能稳定给文生图、图生视频、Ark Seedance 使用，是否存在审核、身份漂移、文字水印、硬接触、动作节拍过载等风险。"
+            "判断要直接、面向制片执行，重点检查故事保真、连续性、物理逻辑、prompt 可用性、字段完整性、下一阶段是否有足够信息。"
+            "下面提供的【已沉淀制作知识卡】代表经过实测验证的制作决策，优先级高于通用常识：如果产物遵循了这些知识（例如 first-frame-only 首帧驱动、背影/过肩锁方向、不依赖中文招牌文字、单条视频≥5秒），不要把它判成风险或要求改回通用做法；只在产物违背知识卡、或存在知识卡未覆盖的真实问题时才提风险与修改。"
+            "所有字段值必须使用简体中文。",
             (
                 f"输出语言规则：{CHINESE_OUTPUT_RULE}\n"
                 f"Skill id: {skill_id}\n"
@@ -205,6 +213,18 @@ def write_user_review_package(path: Path, skill_id: str, artifact_ref: str, arti
         "## 你需要重点确认",
         "",
         bullet_lines(review.get("user_review_focus")),
+        "",
+        "## 导演审阅",
+        "",
+        bullet_lines(review.get("director_review")),
+        "",
+        "## 连续性审阅",
+        "",
+        bullet_lines(review.get("continuity_review")),
+        "",
+        "## 生成风险审阅",
+        "",
+        bullet_lines(review.get("generation_risk_review")),
         "",
         "## 修改建议",
         "",
