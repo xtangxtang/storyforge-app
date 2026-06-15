@@ -30,6 +30,14 @@ def main(argv: list[str] | None = None) -> int:
     advise.add_argument("--changed-file", help="File path that was edited")
     advise.add_argument("--scene-id", help="Optional scene id to focus recommendations")
 
+    decision = sub.add_parser("review-decision")
+    decision.add_argument("--skill-id", required=True, help="Skill/stage being reviewed")
+    decision.add_argument("--decision", required=True, choices=["approve", "revise", "changes_requested", "block", "reject"])
+    decision.add_argument("--changed-stage", help="Stage json affected by this decision")
+    decision.add_argument("--scene-id", default="", help="Optional scene id")
+    decision.add_argument("--item-id", default="", help="Optional storyboard/atomic/keyframe id")
+    decision.add_argument("--note", default="", help="Decision note")
+
     pipe = sub.add_parser("pipeline-from-script")
     pipe.add_argument("--script", required=True, help="Path to script text/markdown")
     pipe.add_argument("--style", help="Production style id, for example film, short_drama, comic_drama, anime, documentary")
@@ -51,7 +59,7 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(registry.describe(), ensure_ascii=False, indent=2))
         return 0
 
-    if args.cmd in {"run", "advise-rerun"} and not args.project:
+    if args.cmd in {"run", "advise-rerun", "review-decision"} and not args.project:
         print(f"--project is required for `{args.cmd}`", file=sys.stderr)
         return 2
 
@@ -82,6 +90,20 @@ def main(argv: list[str] | None = None) -> int:
             "skip_agent_review": True,
         }
         result = runner.run("stage_rerun_advisor", input_data)
+        print(json.dumps({"ok": result.ok, "message": result.message, **result.data}, ensure_ascii=False, indent=2))
+        return 0 if result.ok else 1
+
+    if args.cmd == "review-decision":
+        input_data = {
+            "skill_id": args.skill_id,
+            "decision": args.decision,
+            "changed_stage": args.changed_stage or "",
+            "scene_id": args.scene_id,
+            "item_id": args.item_id,
+            "note": args.note,
+            "skip_agent_review": True,
+        }
+        result = runner.run("review_decision", input_data)
         print(json.dumps({"ok": result.ok, "message": result.message, **result.data}, ensure_ascii=False, indent=2))
         return 0 if result.ok else 1
 

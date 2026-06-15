@@ -81,6 +81,13 @@ class SkillRunner:
                 "result": {"ok": result.ok, "message": result.message, **result.data},
             }
         )
+        try:
+            index = self.ctx.workspace.refresh_review_index()
+            result.data.setdefault("review_index_file", "review/index.json")
+            result.data.setdefault("review_index_markdown", "review/index.md")
+            result.data.setdefault("review_next_action", index.get("next_action"))
+        except Exception as exc:  # noqa: BLE001 - 审阅索引是辅助产物，不能阻断主流程。
+            result.data.setdefault("review_index_error", str(exc))
         return result
 
 

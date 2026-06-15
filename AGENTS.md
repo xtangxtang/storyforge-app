@@ -21,6 +21,7 @@ python -m compileall storyforge
 python -m storyforge.cli list-skills
 python -m storyforge.cli pipeline-from-document --document path/to/script.docx
 python -m storyforge.cli --project demo advise-rerun --changed-stage 03_storyboards.json --scene-id SCENE_001
+python -m storyforge.cli --project demo review-decision --skill-id storyboard_plan --decision approve
 python -m storyforge.cli --project demo run script_ingest --input-json "{\"script_path\":\"script.md\"}"
 python -m storyforge.cli --project demo pipeline-from-script --script path/to/script.md
 python -m storyforge.cli --project demo pipeline-from-script --script path/to/script.md --with-media
@@ -67,6 +68,7 @@ storyforge list-skills
 - `scene_transition_plan`：根据上一大场景视频和下一大场景参考图，规划大场景之间的连贯转场参考视频。
 - `scene_transition_generate_ark`：可选备用路径，通过 Ark 生成大场景转场参考视频。
 - `stage_rerun_advisor`：用户修改某个 stage 或大场景后，提示后续哪些阶段需要重跑或复查。
+- `review_decision`：记录用户对 stage 的 approve/revise/block 决策，并把修改意见和重跑建议写入 review/decisions。
 - `knowledge_capture`：把用户认可的分镜、动作拆解、提示词或风格提炼成项目级/全局知识卡。
 
 新增能力时优先新增一个 skill，并在 `storyforge_skills/<skill_id>/SKILL.md` 写清输入、输出、约束和人工确认点。
@@ -105,11 +107,18 @@ projects/<project-id>/
   keyframes/
   clips/
   review/
+    index.json
+    index.md
+    decisions.json
   archive/
   manifest.json
 ```
 
 `stages/*.json` 是机器可读的阶段产物；`review/*.md` 是给用户或 LLM 审阅修改的摘要；`manifest.json` 记录 skill 运行历史。
+
+`review/index.json` 和 `review/index.md` 是 agent-native 审阅入口。每次 skill 运行后由 `SkillRunner` 自动刷新，包含当前 stage、最近运行、待用户审阅材料、stage 文件、媒体文件、下一步建议和常用命令。Codex/Claude Code 或未来轻量 Review Console 都应优先读取该索引，而不是自行遍历整个项目目录。
+
+`review/decisions.json` 和 `wiki/decisions.md` 记录用户审阅决策。用户确认或要求修改某个 stage 后，应调用 `review_decision`；它会记录 approve/revise/block、scene_id、item_id、修改意见，并在需要时附带后续重跑建议。后续 agent 必须优先尊重这些决策。
 
 全局可复用知识放在仓库根目录的 `knowledge/cards/`。当用户确认某个分镜、镜头语言、动作拆分或提示词很好时，先调用 `knowledge_capture` 沉淀成知识卡；只有当这个模式需要稳定执行步骤时，才升级成新的 skill。
 

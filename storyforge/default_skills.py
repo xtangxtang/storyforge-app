@@ -1299,6 +1299,52 @@ class StageRerunAdvisorSkill:
         return SkillResult(True, "阶段重跑建议已生成", {"file": "stages/08_stage_rerun_advisor.json", "rerun_count": sum(1 for item in recommendations if item.get("action") == "rerun")})
 
 
+class ReviewDecisionSkill:
+    id = "review_decision"
+    description = "记录用户对某个 stage 的 approve/revise/block 决策，并提示后续重跑或复查。"
+
+    def run(self, ctx: SkillContext, input_data: dict[str, Any]) -> SkillResult:
+        skill_id = str(input_data.get("skill_id") or input_data.get("stage_skill") or "").strip()
+        decision = str(input_data.get("decision") or "").strip().lower()
+        if decision not in {"approve", "revise", "changes_requested", "block", "reject"}:
+            return SkillResult(False, "decision 必须是 approve、revise、changes_requested、block 或 reject", {})
+        changed_stage = normalize_stage_name(str(input_data.get("changed_stage") or input_data.get("stage") or stage_for_skill(skill_id) or "")).strip()
+        scene_id = str(input_data.get("scene_id") or "").strip()
+        item_id = str(input_data.get("item_id") or "").strip()
+        note = str(input_data.get("note") or input_data.get("comment") or "").strip()
+        requested_changes = input_data.get("requested_changes") or []
+        if isinstance(requested_changes, str):
+            requested_changes = [requested_changes]
+        graph = stage_dependency_graph()
+        impacted = impacted_downstream_stages(changed_stage, graph) if changed_stage else []
+        stale = stale_stage_reports(ctx, graph)
+        recommendations = rerun_recommendations(changed_stage, impacted, stale, scene_id) if decision != "approve" else []
+        record = ctx.workspace.append_decision(
+            {
+                "skill_id": skill_id,
+                "decision": decision,
+                "changed_stage": changed_stage,
+                "scene_id": scene_id,
+                "item_id": item_id,
+                "note": note,
+                "requested_changes": requested_changes,
+                "rerun_recommendations": recommendations,
+            }
+        )
+        out = {
+            "source": self.id,
+            "decision": record,
+            "decisions_file": "review/decisions.json",
+            "decisions_markdown": "wiki/decisions.md",
+            "rerun_recommendations": recommendations,
+        }
+        ctx.workspace.write_stage("09_review_decision.json", out)
+        write_review_markdown(ctx.workspace.review_dir / "09_review_decision.md", "用户审阅决策记录", out)
+        ctx.workspace.refresh_review_index()
+        message = "用户审阅决策已记录"
+        return SkillResult(True, message, {"file": "stages/09_review_decision.json", "decision_id": record.get("id"), "decision": decision, "rerun_count": len(recommendations)})
+
+
 class KnowledgeCaptureSkill:
     id = "knowledge_capture"
     description = "把已确认的分镜、镜头、风格或 prompt 模式沉淀为项目级/全局知识卡。"
@@ -1388,6 +1434,7 @@ def default_registry() -> SkillRegistry:
         SceneTransitionPlanSkill(),
         SceneTransitionGenerateArkSkill(),
         StageRerunAdvisorSkill(),
+        ReviewDecisionSkill(),
         KnowledgeCaptureSkill(),
     ])
 
@@ -1763,6 +1810,17 @@ def stage_dependency_graph() -> dict[str, dict[str, Any]]:
         "06b_scene_transition_plan.json": {"skill": "scene_transition_plan", "deps": ["06_videos.json", "00c_scene_bible.json", "00e_cross_scene_continuity.json"]},
         "06b_scene_transitions.json": {"skill": "scene_transition_generate_ark", "deps": ["06b_scene_transition_plan.json"]},
     }
+
+
+def stage_for_skill(skill_id: str) -> str:
+    for stage, meta in stage_dependency_graph().items():
+        if str(meta.get("skill", "")).split(" ")[0] == skill_id or skill_id in str(meta.get("skill", "")):
+            return stage
+    skill_stage_map = {
+        "review_decision": "09_review_decision.json",
+        "knowledge_capture": "07_knowledge_capture.json",
+    }
+    return skill_stage_map.get(skill_id, "")
 
 
 def stale_stage_reports(ctx: SkillContext, graph: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
@@ -2405,6 +2463,8 @@ def normalize_stage_name(value: str) -> str:
         "scene_transition_generate_ark": "06b_scene_transitions.json",
         "stage_rerun_advisor": "08_stage_rerun_advisor.json",
         "rerun_advisor": "08_stage_rerun_advisor.json",
+        "review_decision": "09_review_decision.json",
+        "decisions": "09_review_decision.json",
     }
     return stage_map.get(value, value)
 
