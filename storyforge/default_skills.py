@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from .document import extract_document_text
-from .services import media_ref
+from .services import downscaled_media_ref, media_ref
 from .skills import SkillContext, SkillRegistry, SkillResult, write_review_markdown
 
 # 对白/动作镜头恒加的整洁画面约束，避免 Seedance 烧录字幕、台词文字或水印 logo，并防串脸/换人/海报拼贴/塑料感。
@@ -433,9 +433,14 @@ class SceneReferenceGenerateArkSkill:
                 existing[ref_id] = {**current, **task, "local_path": str(local_path), "image_provider": "ark", "state": "failed", "error": f"缺少必须继承的底图，已拒绝纯文字生成：{sorted(set(blocking_missing))}（先生成对应 canon / master plate，或显式传 allow_missing_canon）"}
                 continue
             try:
-                ref_pairs = canon_used + dep_used
-                media_refs = [media for _id, media in ref_pairs][:6]
-                url = ctx.ark.generate_image(ark_image_prompt(str(task.get("prompt") or ""), must_show=task.get("must_show"), must_not_show=task.get("must_not_show"), has_refs=bool(media_refs)), refs=media_refs or None)
+                # 参考图按重要度排序并限量（payload 太大/太多会拖慢甚至超时）：地点canon→master→角色→道具。
+                ref_pairs = sorted(canon_used + dep_used, key=lambda p: scene_ref_priority(p[0]))[:5]
+                media_refs = [media for _id, media in ref_pairs]
+                url = ctx.ark.generate_image(
+                    ark_image_prompt(str(task.get("prompt") or ""), must_show=task.get("must_show"), must_not_show=task.get("must_not_show")),
+                    refs=media_refs or None,
+                    suffix=ark_image_constraints(has_refs=bool(media_refs)),
+                )
                 ctx.ark.download(url, local_path)
                 generated += 1
                 existing[ref_id] = {**task, "reference_url": url, "local_path": str(local_path), "image_provider": "ark", "state": "ready", "reference_image_inputs": [rid for rid, _m in ref_pairs]}
@@ -532,7 +537,7 @@ class AssetCanonGenerateArkSkill:
                 existing[canon_id] = {**current, **task, "local_path": str(local_path), "image_provider": "ark", "state": "ready"}
                 continue
             try:
-                url = ctx.ark.generate_image(ark_image_prompt(str(task.get("prompt") or ""), must_show=task.get("must_show"), must_not_show=task.get("must_not_show")))
+                url = ctx.ark.generate_image(ark_image_prompt(str(task.get("prompt") or ""), must_show=task.get("must_show"), must_not_show=task.get("must_not_show")), suffix=ark_image_constraints())
                 ctx.ark.download(url, local_path)
                 generated += 1
                 existing[canon_id] = {**task, "reference_url": url, "local_path": str(local_path), "image_provider": "ark", "state": "ready"}
@@ -1105,7 +1110,7 @@ class KeyframeGenerateArkSkill:
                 }
                 continue
             try:
-                first_url = ctx.ark.generate_image(ark_image_prompt(str(task.get("first_frame_prompt", "")), must_show=task.get("frame_must_show"), must_not_show=task.get("frame_must_not_show"), has_refs=bool(refs), lock_direction=True), refs=refs)
+                first_url = ctx.ark.generate_image(ark_image_prompt(str(task.get("first_frame_prompt", "")), must_show=task.get("frame_must_show"), must_not_show=task.get("frame_must_not_show")), refs=refs, suffix=ark_image_constraints(has_refs=bool(refs), lock_direction=True))
                 ctx.ark.download(first_url, first_path)
                 generated += 1
                 existing[atom_id] = {
@@ -1377,15 +1382,9 @@ def ark_image_prompt(
     prompt: str,
     must_show: list[str] | None = None,
     must_not_show: list[str] | None = None,
-    has_refs: bool = False,
-    lock_direction: bool = False,
 ) -> str:
-    """Ark 文生图的通用硬约束（与具体项目无关）。
-    项目专属的方向/连续性（哪座门、谁穿什么、往哪走）应写进该原子镜头的
-    first_frame_prompt（数据层），不要写死在框架代码里。
-    must_show/must_not_show 会真正折进 prompt（不再只存 JSON 给人看）；
-    has_refs 时强制"严格保持参考图身份/校服/大门外观"；
-    lock_direction 仅用于关键帧控制帧（建立镜/canon/场景总览不应被强制背影）。"""
+    """只产【中文创作部分】（含 must_show/must_not_show），用于送翻译。
+    英文硬约束改由 ark_image_constraints() 在翻译后追加，避免把英文再翻译一遍拖慢。"""
     cn_parts = [prompt]
     if must_show:
         shown = "；".join(str(x).strip() for x in must_show if str(x).strip())
@@ -1395,7 +1394,13 @@ def ark_image_prompt(
         hidden = "；".join(str(x).strip() for x in must_not_show if str(x).strip())
         if hidden:
             cn_parts.append("画面绝不出现：" + hidden)
-    cn_prompt = "\n".join(p for p in cn_parts if p and p.strip())
+    return "\n".join(p for p in cn_parts if p and p.strip())
+
+
+def ark_image_constraints(has_refs: bool = False, lock_direction: bool = False) -> str:
+    """Ark 文生图英文硬约束，翻译后直接追加（不再被翻译）。
+    has_refs 时强制"严格保持参考图身份/校服/大门外观"；
+    lock_direction 仅用于关键帧控制帧（建立镜/canon/场景总览不应被强制背影）。"""
     constraints = [
         "Ark text-to-image hard constraints: vertical 9:16 cinematic realistic control frame.",
         "Do not render readable Chinese or English text anywhere; signs, plaques, labels, uniforms, papers, and posters must be blank, shadowed, cropped, or too defocused to read.",
@@ -1412,7 +1417,7 @@ def ark_image_prompt(
         constraints.append(
             "Lock motion direction with camera-relative framing: for action or direction shots use a back or over-the-shoulder view with the destination in the deep background; for dialogue use over-the-shoulder framing and avoid two large frontal faces.",
         )
-    return cn_prompt + "\n\n" + "\n".join(constraints)
+    return "\n".join(constraints)
 
 
 class VideoGenerateArkSkill:
@@ -1469,7 +1474,7 @@ class VideoGenerateArkSkill:
                             "完全看不到任何人脸，连侧脸轮廓也不可见。"
                         )
                         refs = scene_reference_image_refs(ctx, kf, scene_reference_context) + asset_image_refs(list(kf.get("reference_asset_names") or []), asset_context)
-                        new_first_url = ctx.ark.generate_image(ark_image_prompt(faceless_prompt, must_show=kf.get("frame_must_show"), must_not_show=kf.get("frame_must_not_show"), has_refs=bool(refs), lock_direction=True), refs=refs or None)
+                        new_first_url = ctx.ark.generate_image(ark_image_prompt(faceless_prompt, must_show=kf.get("frame_must_show"), must_not_show=kf.get("frame_must_not_show")), refs=refs or None, suffix=ark_image_constraints(has_refs=bool(refs), lock_direction=True))
                         first_path = resolve_workspace_path(ctx, kf.get("first_frame_local_path")) or ctx.workspace.keyframes_dir / f"{safe_name(atom_id)}_first.png"
                         ctx.ark.download(new_first_url, first_path)
                         kf = {**kf, "first_frame_url": new_first_url, "first_frame_local_path": str(first_path), "auto_faceless_retry": True}
@@ -2368,7 +2373,7 @@ def resolve_dependency_reference_media(
         dep = existing.get(str(dep_id)) or {}
         local = resolve_workspace_path(ctx, dep.get("local_path"))
         if local and local.exists():
-            used.append((str(dep_id), media_ref(str(local))))
+            used.append((str(dep_id), downscaled_media_ref(str(local))))
         else:
             missing.append(str(dep_id))
     return used, missing
@@ -2553,6 +2558,18 @@ def location_canon_ids_for_scene(scene: dict[str, Any], canon_index: dict[str, d
     return hits
 
 
+def scene_ref_priority(ref_id: str) -> int:
+    """喂给场景参考图的底图重要度：地点 canon(大门) > 同场景 master plate > 角色 canon > 道具 canon。"""
+    r = str(ref_id)
+    if r.startswith("canon_loc_"):
+        return 0
+    if "master_plate" in r:
+        return 1
+    if r.startswith("canon_char_"):
+        return 2
+    return 3
+
+
 def resolve_canon_reference_media(
     ctx: SkillContext, canon_ids: list[str], canon_index: dict[str, dict[str, Any]]
 ) -> tuple[list[tuple[str, str]], list[str]]:
@@ -2563,7 +2580,7 @@ def resolve_canon_reference_media(
         canon = canon_index.get(str(canon_id))
         local = resolve_workspace_path(ctx, canon.get("local_path")) if canon else None
         if canon and str(canon.get("state")) == "ready" and local and local.exists():
-            used.append((str(canon_id), media_ref(str(local))))
+            used.append((str(canon_id), downscaled_media_ref(str(local))))
         else:
             missing.append(str(canon_id))
     return used, missing

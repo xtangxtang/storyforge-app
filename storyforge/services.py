@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import io
 import json
 import mimetypes
 import re
@@ -104,14 +105,11 @@ class LLMClient:
         if not re.search(r"[\u4e00-\u9fff]", prompt):
             return prompt
         return self.chat(
-            "Translate this image/video generation prompt into concise natural English. "
-            "Preserve EXACTLY, never drop or soften: (1) which character wears which color and which bag, and on which side of frame each one stands; "
-            "(2) screen-direction and axis — left/right and toward-or-away-from camera, and the 180-degree line; "
-            "(3) camera height and angle (e.g. eye-level, low-angle, no overhead/bird's-eye) and shot size; "
-            "(4) color temperature and main-light direction; "
-            "(5) every negative / prohibition clause (no text, no overhead shot, no collage, do not change identity or clothing) — translate each 'do not / 避免 / 严禁 / 绝不' clause verbatim, do not omit or merge them; "
-            "(6) character identity, prop state, and any required on-screen Chinese text verbatim in quotes. "
-            "Output only the English prompt.",
+            "Translate this image/video prompt to concise English. Be faithful and compact — do NOT expand, elaborate, or add details. "
+            "Preserve exactly, never drop: per-character color & bag & which side of frame; screen direction/axis (left/right, toward/away camera); "
+            "camera height/angle (eye-level, no overhead) and shot size; color temperature & main-light direction; "
+            "every negative clause (no text / no overhead / no collage / do not change identity or clothing) verbatim; and required on-screen Chinese text in quotes. "
+            "Output only the English prompt, similar length to the input.",
             prompt,
             temperature=0.1,
             tag="translate_visual_prompt",
@@ -129,8 +127,10 @@ class ArkClient:
             raise RuntimeError("Missing arkApiKey / ARK_API_KEY")
         return {"Authorization": f"Bearer {self.config.ark_api_key}", "Content-Type": "application/json"}
 
-    def generate_image(self, prompt: str, refs: list[str] | None = None) -> str:
+    def generate_image(self, prompt: str, refs: list[str] | None = None, suffix: str = "") -> str:
         prompt_en = self.llm.translate_visual_prompt(prompt)
+        if suffix:
+            prompt_en = f"{prompt_en}\n{suffix}"
         body: dict[str, Any] = {
             "model": self.config.ark_image_model,
             "prompt": prompt_en,
@@ -286,6 +286,26 @@ def media_ref(value: str) -> str:
     mime_type = mimetypes.guess_type(path.name)[0] or "image/png"
     encoded = base64.b64encode(path.read_bytes()).decode("ascii")
     return f"data:{mime_type};base64,{encoded}"
+
+
+def downscaled_media_ref(value: str, max_side: int = 768, quality: int = 85) -> str:
+    """参考图专用：把本地图缩小并转 JPEG base64，大幅降低请求体积（参考图只需身份/结构提示，不必全分辨率）。
+    远端 URL、data URI、缺 Pillow 或失败时回退到原始 media_ref。"""
+    if not value or value.startswith(("http://", "https://", "data:")):
+        return media_ref(value)
+    path = Path(value)
+    if not path.exists():
+        return media_ref(value)
+    try:
+        from PIL import Image  # 延迟导入，无 Pillow 时回退
+        im = Image.open(path).convert("RGB")
+        im.thumbnail((max_side, max_side))
+        buf = io.BytesIO()
+        im.save(buf, format="JPEG", quality=quality)
+        encoded = base64.b64encode(buf.getvalue()).decode("ascii")
+        return f"data:image/jpeg;base64,{encoded}"
+    except Exception:
+        return media_ref(value)
 
 
 def video_url_ref(value: str) -> str:
