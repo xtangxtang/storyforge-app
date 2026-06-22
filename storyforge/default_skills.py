@@ -1053,6 +1053,7 @@ class KeyframeGenerateArkSkill:
             if item.get("atomic_shot_id")
         }
         style_context = load_style_context(ctx)
+        scene_reference_context = load_scene_reference_context(ctx)
         # canon 注入：先为本批次涉及的地点/角色生成统一锚点（地点=canon基准空镜，角色=定妆图），
         # 缓存进 02_assets.json；该地点每个首帧都引用同一张基准图 -> 跨镜头结构统一。
         # 按 selected_tasks 计算，小批量测试只生成用到的锚点；锚点缓存后续批次自动复用。
@@ -1246,6 +1247,7 @@ def ensure_asset_anchors(ctx: SkillContext, style_context: str = "", only_names:
     bible = ctx.workspace.read_stage("00b_consistency.json")
     uniform = str(bible.get("uniform") or "")
     layouts = bible.get("location_layouts") or {}
+    canon_index = load_asset_canon_index(ctx)  # 优先复用项目级 canon，避免重复出图/漂移
     anchors: dict[str, str] = {}
     changed = False
     for asset in assets:
@@ -1254,24 +1256,30 @@ def ensure_asset_anchors(ctx: SkillContext, style_context: str = "", only_names:
             continue
         if only_names is not None and name not in only_names:
             continue
+        # 1) 项目级 canon 优先（陈/俞/自行车/书包/大门等已有 canon 的资产直接复用，零额外配额、与 canon 一致）。
+        canon = canon_index.get(canon_id_for_asset(asset))
+        canon_local = resolve_workspace_path(ctx, canon.get("local_path")) if canon else None
+        if canon and str(canon.get("state")) == "ready" and canon_local and canon_local.exists():
+            anchors[name] = downscaled_media_ref(str(canon_local))
+            continue
         local = str(asset.get("reference_image_local_path") or "")
         if local and Path(local).exists():
-            anchors[name] = media_ref(local)
+            anchors[name] = downscaled_media_ref(local)
             continue
         fallback = ctx.workspace.assets_dir / f"{safe_name(name)}.png"
         if fallback.exists():
             asset["reference_image_local_path"] = str(fallback)
-            anchors[name] = media_ref(str(fallback))
+            anchors[name] = downscaled_media_ref(str(fallback))
             changed = True
             continue
         if asset.get("reference_image_url"):
             anchors[name] = str(asset["reference_image_url"])
             continue
-        url = ctx.ark.generate_image(anchor_prompt(asset, style_context, uniform=uniform, layout=str(layouts.get(name) or "")))
+        url = ctx.ark.generate_image(anchor_prompt(asset, style_context, uniform=uniform, layout=str(layouts.get(name) or "")), suffix=ark_image_constraints())
         path = ctx.ark.download(url, ctx.workspace.assets_dir / f"{safe_name(name)}.png")
         asset["reference_image_url"] = url
         asset["reference_image_local_path"] = str(path)
-        anchors[name] = media_ref(str(path))
+        anchors[name] = downscaled_media_ref(str(path))
         changed = True
     if changed:
         ctx.workspace.write_stage("02_assets.json", {**stage, "assets": assets})
@@ -2691,7 +2699,7 @@ def scene_references_for_task(task: dict[str, Any], scene_reference_context: dic
 def scene_reference_media_ref(ctx: SkillContext, scene_ref: dict[str, Any]) -> str:
     local = resolve_workspace_path(ctx, scene_ref.get("local_path"))
     if local and local.exists():
-        return media_ref(str(local))
+        return downscaled_media_ref(str(local))  # 参考图缩小，避免大 payload 拖慢/卡死出图
     url = str(scene_ref.get("reference_url") or scene_ref.get("url") or "").strip()
     if url.startswith(("http://", "https://", "data:")):
         return url
