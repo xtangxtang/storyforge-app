@@ -1433,10 +1433,20 @@ class VideoGenerateArkSkill:
     description = "基于已确认关键帧，按 render_mode 分流生成视频：i2v 走无脸背影首帧（锁方向+过审），t2v 走文生视频（无脸背影首帧+canon+定妆图作参考图保方向/场景/身份）。"
 
     def run(self, ctx: SkillContext, input_data: dict[str, Any]) -> SkillResult:
-        keyframes = list(ctx.workspace.read_stage("05_keyframes.json").get("keyframes") or [])
-        if not keyframes:
+        all_keyframes = list(ctx.workspace.read_stage("05_keyframes.json").get("keyframes") or [])
+        if not all_keyframes:
             return SkillResult(False, "没有找到 keyframes", {})
-        clips = []
+        # 逐镜 gated：用 atomic_shot_ids/ids 一次只出一个镜；overwrite 才重出已成片的镜。
+        only_ids = normalize_id_filter(input_data.get("atomic_shot_ids") or input_data.get("ids"))
+        overwrite = bool(input_data.get("overwrite"))
+        keyframes = [kf for kf in all_keyframes if not only_ids or str(kf.get("atomic_shot_id")) in only_ids]
+        if not keyframes:
+            return SkillResult(False, f"没有匹配的 keyframe：{sorted(only_ids)}", {})
+        existing_clips = {
+            str(c.get("atomic_shot_id")): c
+            for c in ctx.workspace.read_stage("06_videos.json").get("clips", [])
+            if c.get("atomic_shot_id")
+        }
         previous: str | None = None
         # 默认不把前一段视频当参考喂给视频生成：实测参考视频/参考图会把相机拽正、带歪方向，
         # 还容易触发审核。方向由背影首帧锁定。仅在用户显式传 chain_reference_video 时才链式参考。
@@ -1450,8 +1460,11 @@ class VideoGenerateArkSkill:
             for t in ctx.workspace.read_stage("05_keyframe_plan.json").get("keyframe_tasks") or []
         }
         for kf in keyframes:
+            atom_id = str(kf.get("atomic_shot_id"))
+            clip_path = ctx.workspace.clips_dir / f"{safe_name(atom_id)}.mp4"
+            if clip_path.exists() and not overwrite and atom_id in existing_clips:
+                continue  # 已有成片且未要求覆盖：逐镜返工时不重复出其它镜。
             try:
-                atom_id = str(kf.get("atomic_shot_id"))
                 render_mode = str(kf.get("render_mode") or "i2v")
                 prompt = video_prompt_with_style(str(kf.get("video_prompt", "")), style_context)
                 dur = int(kf.get("duration") or 5)
@@ -1488,10 +1501,11 @@ class VideoGenerateArkSkill:
                         kf = {**kf, "first_frame_url": new_first_url, "first_frame_local_path": str(first_path), "auto_faceless_retry": True}
                         url = ctx.ark.generate_video(prompt, str(first_path), duration=dur, reference_video_urls=ref_videos)
                 previous = url
-                local = ctx.ark.download(url, ctx.workspace.clips_dir / f"{safe_name(atom_id)}.mp4")
-                clips.append({**kf, "state": "ready", "video_url": url, "video_local_path": str(local)})
+                local = ctx.ark.download(url, clip_path)
+                existing_clips[atom_id] = {**kf, "state": "ready", "video_url": url, "video_local_path": str(local)}
             except Exception as exc:
-                clips.append({**kf, "state": "failed", "error": str(exc)})
+                existing_clips[atom_id] = {**kf, "state": "failed", "error": str(exc)}
+        clips = [existing_clips[str(kf.get("atomic_shot_id"))] for kf in all_keyframes if str(kf.get("atomic_shot_id")) in existing_clips]
         out = {"source": self.id, "clips": clips, "success": sum(c.get("state") == "ready" for c in clips), "failed": sum(c.get("state") == "failed" for c in clips)}
         ctx.workspace.write_stage("06_videos.json", out)
         write_review_markdown(ctx.workspace.review_dir / "06_videos.md", "视频生成审阅", out)
