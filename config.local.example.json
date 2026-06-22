@@ -5,6 +5,11 @@
   "llmApiKey": "sk-...",
   "llmModel": "qwen3.6-plus",
 
+  "_visionNote": "看图守门(visual_consistency_review)需要支持视觉模型的端点+key；下方留空则回退 llmApiKey，但 coding 端点不支持视觉模型。填 DashScope Model Studio 的 key 与 compatible-mode 端点即可启用。",
+  "llmVisionBaseUrl": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+  "llmVisionModel": "qwen-vl-max",
+  "llmVisionApiKey": "",
+
   "arkBaseUrl": "https://ark.cn-beijing.volces.com/api/plan/v3",
   "arkApiKey": "ark-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
   "arkImageModel": "doubao-seedream-5.0-lite",

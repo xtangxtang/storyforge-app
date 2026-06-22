@@ -33,6 +33,8 @@ review/05_keyframe_plan.md
 - 每个任务应保留 `scene_id`、`continuity_state_start`、`continuity_state_end`，让图片生成明确继承大场景状态。
 - 每个任务必须保留跨场景连续性约束，尤其是服装、携带物、道具归属和身体/情绪状态。
 - 如果存在场景参考图，每个任务应包含 `scene_reference_ids` 和 `scene_reference_local_paths`，优先引用同一 `scene_id` 的 `location_master_plate`、`prop_placement_plate` 和主要机位参考。
+- 进入某个大场景正式关键帧前，必须先检查该 `scene_id` 的共同资产包是否已规划、生成并审阅。共同资产包不是单张校门图，而是一组场景共享资产：`location_master_plate`、必要角色背影 canon、`prop_placement_plate`、主要 `camera_angle_plate_*`，以及该场景需要的动作/状态参考图。
+- 每个关键帧任务应包含 `scene_asset_pack_id` 和 `scene_asset_pack_status`。如果 `scene_asset_pack_status.is_ready_for_keyframes` 为 false，应先补齐场景资产包，不应继续正式生成关键帧。
 - `first_frame_prompt` 要合并风格摘要和相关资产锚点，但保持在 prompt budget 内。
 - 使用 `keyframes/<atomic_shot_id>_first.png` 这类稳定路径。
 - 不调用 Ark 图片生成；这里停下来给 Codex 生成图片并交给用户审阅。

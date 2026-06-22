@@ -38,10 +38,22 @@ def main(argv: list[str] | None = None) -> int:
     decision.add_argument("--item-id", default="", help="Optional storyboard/atomic/keyframe id")
     decision.add_argument("--note", default="", help="Decision note")
 
+    apply_change = sub.add_parser("apply-change")
+    apply_change.add_argument("--change-request", required=True, help="User change request to propagate")
+    apply_change.add_argument("--changed-stage", help="Stage json that the change starts from, for example 03_storyboards.json")
+    apply_change.add_argument("--changed-file", help="File path that the change starts from")
+    apply_change.add_argument("--scene-id", default="", help="Optional scene id")
+    apply_change.add_argument("--item-id", default="", help="Optional storyboard/atomic/keyframe/asset id")
+    apply_change.add_argument("--target-stages", default="", help="Optional comma-separated mutable target stages")
+    apply_change.add_argument("--apply", action="store_true", help="Actually write synchronized stage updates. Without this, only generate a plan.")
+    apply_change.add_argument("--with-review", action="store_true", help="Run the normal stage review gate after applying or planning")
+
     pipe = sub.add_parser("pipeline-from-script")
     pipe.add_argument("--script", required=True, help="Path to script text/markdown")
     pipe.add_argument("--style", help="Production style id, for example film, short_drama, comic_drama, anime, documentary")
     pipe.add_argument("--style-note", default="", help="Optional custom style note")
+    pipe.add_argument("--director-style", help="Director language id, for example japanese_healing, youth_campus_realism, sports_hotblood_realism")
+    pipe.add_argument("--director-style-note", default="", help="Optional custom director language note")
     pipe.add_argument("--with-media", action="store_true", help="Import existing Codex keyframes and run Ark video generation")
     pipe.add_argument("--auto-continue", action="store_true", help="Run every stage without stopping at user review gates")
 
@@ -49,6 +61,8 @@ def main(argv: list[str] | None = None) -> int:
     doc_pipe.add_argument("--document", required=True, help="Path to txt, md, docx, or pdf script document")
     doc_pipe.add_argument("--style", help="Production style id, for example film, short_drama, comic_drama, anime, documentary")
     doc_pipe.add_argument("--style-note", default="", help="Optional custom style note")
+    doc_pipe.add_argument("--director-style", help="Director language id, for example japanese_healing, youth_campus_realism, sports_hotblood_realism")
+    doc_pipe.add_argument("--director-style-note", default="", help="Optional custom director language note")
     doc_pipe.add_argument("--with-media", action="store_true", help="Import existing Codex keyframes and run Ark video generation")
     doc_pipe.add_argument("--auto-continue", action="store_true", help="Run every stage without stopping at user review gates")
 
@@ -59,7 +73,7 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(registry.describe(), ensure_ascii=False, indent=2))
         return 0
 
-    if args.cmd in {"run", "advise-rerun", "review-decision"} and not args.project:
+    if args.cmd in {"run", "advise-rerun", "review-decision", "apply-change"} and not args.project:
         print(f"--project is required for `{args.cmd}`", file=sys.stderr)
         return 2
 
@@ -107,19 +121,37 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps({"ok": result.ok, "message": result.message, **result.data}, ensure_ascii=False, indent=2))
         return 0 if result.ok else 1
 
+    if args.cmd == "apply-change":
+        input_data = {
+            "change_request": args.change_request,
+            "changed_stage": args.changed_stage or "",
+            "changed_file": args.changed_file or "",
+            "scene_id": args.scene_id,
+            "item_id": args.item_id,
+            "target_stages": args.target_stages,
+            "apply": bool(args.apply),
+            "skip_agent_review": not bool(args.with_review),
+        }
+        result = runner.run("apply_change", input_data)
+        print(json.dumps({"ok": result.ok, "message": result.message, **result.data}, ensure_ascii=False, indent=2))
+        return 0 if result.ok else 1
+
     if args.cmd == "pipeline-from-script":
-        sequence = ["script_ingest", "style_select", "consistency_bible", "scene_bible", "scene_reference_plan", "cross_scene_continuity", "asset_design", "storyboard_plan", "atomic_shot_plan", "continuity_validator", "keyframe_plan"]
+        sequence = ["script_ingest", "style_select", "director_style_select", "consistency_bible", "scene_bible", "scene_reference_plan", "cross_scene_continuity", "asset_design", "storyboard_plan", "atomic_shot_plan", "continuity_validator", "keyframe_plan"]
         if args.with_media:
             sequence.extend(["keyframe_import", "video_generate_ark", "scene_transition_plan"])
         script_path = Path(args.script)
         script_input = {"script_path": str(script_path)}
         style_input = {"style": args.style, "style_note": args.style_note} if args.style else {"force_prompt": True}
+        director_style_input = {"director_style": args.director_style, "director_style_note": args.director_style_note} if args.director_style else {"force_prompt": True}
         print(json.dumps({"project_id": project_id, "project_root": str(workspace.root)}, ensure_ascii=False))
         for skill_id in sequence:
             if skill_id == "script_ingest":
                 current_input = script_input
             elif skill_id == "style_select":
                 current_input = style_input
+            elif skill_id == "director_style_select":
+                current_input = director_style_input
             else:
                 current_input = {}
             if args.auto_continue:
@@ -132,6 +164,9 @@ def main(argv: list[str] | None = None) -> int:
                 return 0
             if result.data.get("validation_blocked"):
                 print(json.dumps(validation_block_payload(project_id, skill_id), ensure_ascii=False))
+                return 0
+            if result.data.get("guard_blocked"):
+                print(json.dumps(review_pause_payload(project_id, skill_id, sequence), ensure_ascii=False))
                 return 0
             if should_pause_for_user_review(result.data, args.auto_continue):
                 print(json.dumps(review_pause_payload(project_id, skill_id, sequence), ensure_ascii=False))
@@ -139,17 +174,20 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.cmd == "pipeline-from-document":
-        sequence = ["document_ingest", "script_ingest", "style_select", "consistency_bible", "scene_bible", "scene_reference_plan", "cross_scene_continuity", "asset_design", "storyboard_plan", "atomic_shot_plan", "continuity_validator", "keyframe_plan"]
+        sequence = ["document_ingest", "script_ingest", "style_select", "director_style_select", "consistency_bible", "scene_bible", "scene_reference_plan", "cross_scene_continuity", "asset_design", "storyboard_plan", "atomic_shot_plan", "continuity_validator", "keyframe_plan"]
         if args.with_media:
             sequence.extend(["keyframe_import", "video_generate_ark", "scene_transition_plan"])
         document_input = {"document_path": str(Path(args.document))}
         style_input = {"style": args.style, "style_note": args.style_note} if args.style else {"force_prompt": True}
+        director_style_input = {"director_style": args.director_style, "director_style_note": args.director_style_note} if args.director_style else {"force_prompt": True}
         print(json.dumps({"project_id": project_id, "project_root": str(workspace.root)}, ensure_ascii=False))
         for skill_id in sequence:
             if skill_id == "document_ingest":
                 current_input = document_input
             elif skill_id == "style_select":
                 current_input = style_input
+            elif skill_id == "director_style_select":
+                current_input = director_style_input
             else:
                 current_input = {}
             if args.auto_continue:
@@ -162,6 +200,9 @@ def main(argv: list[str] | None = None) -> int:
                 return 0
             if result.data.get("validation_blocked"):
                 print(json.dumps(validation_block_payload(project_id, skill_id), ensure_ascii=False))
+                return 0
+            if result.data.get("guard_blocked"):
+                print(json.dumps(review_pause_payload(project_id, skill_id, sequence), ensure_ascii=False))
                 return 0
             if should_pause_for_user_review(result.data, args.auto_continue):
                 print(json.dumps(review_pause_payload(project_id, skill_id, sequence), ensure_ascii=False))

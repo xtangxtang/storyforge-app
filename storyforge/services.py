@@ -68,11 +68,50 @@ class LLMClient:
         data = response.json()
         return data["choices"][0]["message"]["content"]
 
+    def chat_vision_json(self, system: str, user: str, images: list[str], tag: str = "vision") -> dict[str, Any]:
+        """多模态审图：把本地图/URL 作为 image_url 一起送给视觉 LLM，返回 JSON object。
+        images 可为本地路径或 http(s) URL；本地路径会被 media_ref 转成 base64 data URI。"""
+        vision_key = self.config.llm_vision_api_key or self.config.llm_api_key
+        if not vision_key:
+            raise RuntimeError("Missing vision api key (llmVisionApiKey / llmApiKey)")
+        content: list[dict[str, Any]] = [{"type": "text", "text": user}]
+        for img in images[:8]:
+            ref = media_ref(str(img))
+            if ref:
+                content.append({"type": "image_url", "image_url": {"url": ref}})
+        body: dict[str, Any] = {
+            "model": self.config.llm_vision_model,
+            "temperature": 0.1,
+            "response_format": {"type": "json_object"},
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": content},
+            ],
+        }
+        http = require_requests()
+        response = http.post(
+            f"{self.config.llm_vision_base_url}/chat/completions",
+            headers={"Authorization": f"Bearer {vision_key}", "Content-Type": "application/json"},
+            data=json.dumps(body),
+            proxies=self.config.proxies,
+            timeout=300,
+        )
+        if response.status_code != 200:
+            raise RuntimeError(f"{tag} vision failed HTTP {response.status_code}: {response.text[:500]}")
+        return parse_json_object(response.json()["choices"][0]["message"]["content"])
+
     def translate_visual_prompt(self, prompt: str) -> str:
         if not re.search(r"[\u4e00-\u9fff]", prompt):
             return prompt
         return self.chat(
-            "Translate this image/video generation prompt into concise natural English. Preserve every concrete visual detail, camera direction, character identity, prop state, and required on-screen Chinese text verbatim in quotes. Output only the English prompt.",
+            "Translate this image/video generation prompt into concise natural English. "
+            "Preserve EXACTLY, never drop or soften: (1) which character wears which color and which bag, and on which side of frame each one stands; "
+            "(2) screen-direction and axis — left/right and toward-or-away-from camera, and the 180-degree line; "
+            "(3) camera height and angle (e.g. eye-level, low-angle, no overhead/bird's-eye) and shot size; "
+            "(4) color temperature and main-light direction; "
+            "(5) every negative / prohibition clause (no text, no overhead shot, no collage, do not change identity or clothing) — translate each 'do not / 避免 / 严禁 / 绝不' clause verbatim, do not omit or merge them; "
+            "(6) character identity, prop state, and any required on-screen Chinese text verbatim in quotes. "
+            "Output only the English prompt.",
             prompt,
             temperature=0.1,
             tag="translate_visual_prompt",

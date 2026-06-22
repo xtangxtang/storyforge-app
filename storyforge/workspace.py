@@ -41,6 +41,10 @@ class ProjectWorkspace:
         return self.assets_dir / "scene_refs"
 
     @property
+    def canon_dir(self) -> Path:
+        return self.assets_dir / "canon"
+
+    @property
     def keyframes_dir(self) -> Path:
         return self.root / "keyframes"
 
@@ -84,6 +88,7 @@ class ProjectWorkspace:
             self.stages_dir,
             self.assets_dir,
             self.scene_refs_dir,
+            self.canon_dir,
             self.keyframes_dir,
             self.clips_dir,
             self.review_dir,
@@ -240,6 +245,7 @@ class ProjectWorkspace:
         for path in [
             self.raw_dir / "script.md",
             self.wiki_dir / "style.md",
+            self.wiki_dir / "director_style.md",
             self.wiki_dir / "consistency.md",
             self.wiki_dir / "scene_bible.md",
             self.wiki_dir / "cross_scene_continuity.md",
@@ -248,6 +254,7 @@ class ProjectWorkspace:
             self.wiki_dir / "decisions.md",
             self.decisions_path,
             self.stage_path("00_style.json"),
+            self.stage_path("00a_director_style.json"),
             self.stage_path("00b_consistency.json"),
             self.stage_path("00c_scene_bible.json"),
             self.stage_path("00d_scene_reference_plan.json"),
@@ -353,6 +360,12 @@ def review_entry(run: dict[str, Any]) -> dict[str, Any]:
         "artifact": result.get("file"),
         "agent_review_file": result.get("agent_review_file"),
         "user_review_file": result.get("user_review_file"),
+        "director_guard_file": result.get("director_guard_file"),
+        "director_guard_verdict": result.get("director_guard_verdict"),
+        "director_guard_score": result.get("director_guard_score"),
+        "continuity_guard_file": result.get("continuity_guard_file"),
+        "continuity_guard_verdict": result.get("continuity_guard_verdict"),
+        "continuity_guard_score": result.get("continuity_guard_score"),
         "agent_verdict": result.get("agent_verdict"),
         "agent_score": result.get("agent_score"),
         "review_gate_message": result.get("review_gate_message"),
@@ -464,6 +477,10 @@ def format_review_index_markdown(index: dict[str, Any]) -> str:
                     f"- finished_at: {item.get('finished_at', '')}",
                     f"- artifact: {item.get('artifact', '')}",
                     f"- agent_review: {item.get('agent_review_file', '')}",
+                    f"- director_guard: {item.get('director_guard_file', '')}",
+                    f"- director_verdict: {item.get('director_guard_verdict', '')}",
+                    f"- continuity_guard: {item.get('continuity_guard_file', '')}",
+                    f"- continuity_verdict: {item.get('continuity_guard_verdict', '')}",
                     f"- user_review: {item.get('user_review_file', '')}",
                     f"- verdict: {item.get('agent_verdict', '')}",
                     "",

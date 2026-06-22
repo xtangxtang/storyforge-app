@@ -5,7 +5,7 @@ Storyforge 是一个 **LLM-native 短视频生成工作区**。
 它不再是 Flutter 桌面应用，而是围绕 skill、项目文件和可审阅阶段产物构建。目标是：给定一个剧本，LLM 可以按阶段调用 skill，设计角色/场景视觉锚点，生成分镜、原子镜头、关键帧任务，并通过 Ark Seedance 生成视频片段。
 
 ```text
-script -> style -> assets -> storyboards -> atomic shots -> keyframe plan -> Codex images -> Ark videos
+script -> style -> director style -> assets -> storyboards -> atomic shots -> keyframe plan -> Codex images -> Ark videos
 ```
 
 ## 快速开始
@@ -42,10 +42,16 @@ projects/<auto-project-id>/
 python -m storyforge.cli --project demo run style_select --input-json "{\"style\":\"film\"}"
 ```
 
+生产风格之后还会选择导演语言/流派风格，例如日系治愈：
+
+```bash
+python -m storyforge.cli --project demo run director_style_select --input-json "{\"director_style\":\"japanese_healing\"}"
+```
+
 也可以在一开始就指定风格：
 
 ```bash
-python -m storyforge.cli pipeline-from-document --document path/to/script.pdf --style film
+python -m storyforge.cli pipeline-from-document --document path/to/script.pdf --style film --director-style japanese_healing
 ```
 
 当 Codex 生成的图片已经放到计划指定的 `keyframes/` 路径后，继续导入关键帧并生成视频：
@@ -78,6 +84,7 @@ projects/<project-id>/
   stages/
     00_document.json
     00_style.json
+    00a_director_style.json
     01_script.json
     02_assets.json
     03_storyboards.json
@@ -201,3 +208,43 @@ Storyforge 不再默认给每个分镜生成随机九宫格。九宫格容易变
 3. 环境变量
 
 可用字段见 `config.local.example.json`。
+
+## 变更传播
+
+当你改了人物、场景、分镜、原子镜头或关键帧提示词，并希望系统把这个改动同步到前后相关阶段时，使用 `change_propagator`。
+
+更推荐的半自动入口是 `apply-change`。它会统一调用 `apply_change` skill，再由 `apply_change` 调用 `change_propagator`，所以所有修改都能留下计划、备份和报告。
+
+先生成计划：
+
+```bash
+python -m storyforge.cli --project demo apply-change --changed-stage 03_storyboards.json --item-id S1-02 --change-request "把碰撞前的自行车方向锁定为朝学校大门内侧"
+```
+
+确认后应用：
+
+```bash
+python -m storyforge.cli --project demo apply-change --changed-stage 03_storyboards.json --item-id S1-02 --change-request "把碰撞前的自行车方向锁定为朝学校大门内侧" --apply
+```
+
+默认只生成同步计划，不改写文件：
+
+```bash
+python -m storyforge.cli --project demo run change_propagator --input-json "{\"changed_stage\":\"03_storyboards.json\",\"item_id\":\"S1-02\",\"change_request\":\"把碰撞前的自行车方向锁定为朝学校大门内侧\",\"apply\":false}"
+```
+
+确认后再应用：
+
+```bash
+python -m storyforge.cli --project demo run change_propagator --input-json "{\"changed_stage\":\"03_storyboards.json\",\"item_id\":\"S1-02\",\"change_request\":\"把碰撞前的自行车方向锁定为朝学校大门内侧\",\"apply\":true}"
+```
+
+它会输出：
+
+```text
+stages/10_change_propagator.json
+review/10_change_propagator.md
+archive/change_propagator/<timestamp>/<stage>.json
+```
+
+报告里会写清楚：影响了哪些 stage、实际改了哪些文件、每个文件的备份位置、改动摘要，以及后续哪些阶段需要重跑或复查。媒体结果 stage 不会被直接改写，只会被标记为需要重跑或人工复核。
